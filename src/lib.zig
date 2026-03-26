@@ -170,7 +170,7 @@ pub fn writeJsonOutput(
     try writer.writeAll("{");
     try writer.print("\"cols\":{},\"rows\":{},", .{ screen.pages.cols, screen.pages.rows });
     try writer.print("\"cursor\":[{},{}],", .{ screen.cursor.x, screen.cursor.y });
-    try writer.print("\"cursorVisible\":{},", .{ cursor_visible });
+    try writer.print("\"cursorVisible\":{},", .{cursor_visible});
     try writer.print("\"cursorStyle\":\"{s}\",", .{cursor_style_name});
     try writer.print("\"offset\":{},\"totalLines\":{},", .{ offset, total_lines });
     try writer.writeAll("\"lines\":[");
@@ -538,8 +538,16 @@ fn getTerminalCursor(id: u32) ![]const u8 {
     return std.fmt.allocPrint(alloc, "[{},{}]", .{ screen.cursor.x, screen.cursor.y });
 }
 
-/// Check if terminal is ready for reading (parser in ground state).
-/// Returns true if all escape sequences have been fully processed.
+fn getTerminalTotalLines(id: u32) !u32 {
+    terminals_mutex.lock();
+    defer terminals_mutex.unlock();
+
+    const map = getTerminalsMap();
+    const term = map.get(id) orelse return error.TerminalNotFound;
+
+    return @intCast(countLines(term.terminal.screens.active));
+}
+
 fn isTerminalReady(id: u32) !bool {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
@@ -689,6 +697,7 @@ fn initModule(js: *napigen.JsContext, exports: napigen.napi_value) anyerror!napi
     try js.setNamedProperty(exports, "getTerminalJson", try js.createFunction(getTerminalJson));
     try js.setNamedProperty(exports, "getTerminalText", try js.createFunction(getTerminalText));
     try js.setNamedProperty(exports, "getTerminalCursor", try js.createFunction(getTerminalCursor));
+    try js.setNamedProperty(exports, "getTerminalTotalLines", try js.createFunction(getTerminalTotalLines));
     try js.setNamedProperty(exports, "isTerminalReady", try js.createFunction(isTerminalReady));
 
     return exports;

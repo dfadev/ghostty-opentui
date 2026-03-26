@@ -394,6 +394,14 @@ export class PersistentTerminal {
   }
 
   /**
+   * Get the total number of lines in the terminal buffer.
+   */
+  getTotalLines(): number {
+    this.assertNotDestroyed()
+    return native!.getTerminalTotalLines(this._id)
+  }
+
+  /**
    * Check if the terminal is ready for reading.
    * Returns true if the parser is in ground state, meaning all escape
    * sequences have been fully processed.

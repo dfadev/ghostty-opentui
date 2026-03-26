@@ -42,6 +42,8 @@
   - `GhosttyTerminalRenderable` now renders the live cursor through the terminal cursor API instead of painting it into `StyledText`
   - Prevents edge-column cursor background bleed while keeping the existing `terminalDataToStyledText(...)` API unchanged
   - Added a regression test that verifies cursor rendering goes through `setCursorStyle(...)` / `setCursorPosition(...)`
+- Upgrade `@opentui/core` and `@opentui/react` from 0.1.72 to 0.1.90
+  - Fix `lineStarts` → `lineStartCols` rename in `terminal-buffer.ts` (upstream metadata rename in v0.1.87)
 
 ## 1.4.7
 

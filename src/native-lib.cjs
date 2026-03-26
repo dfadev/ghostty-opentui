@@ -1,38 +1,26 @@
 const { platform, arch } = require("os")
 
 function loadNativeModule() {
+  const path = require("path")
+  const dir = path.resolve(__dirname, "..")
+
   // Try development path first
   try {
-    return require("../zig-out/lib/ghostty-opentui.node")
+    return require(path.join(dir, "zig-out", "lib", "ghostty-opentui.node"))
   } catch {}
 
-  // Load platform-specific dist path (hardcoded for static analysis)
+  // Load platform-specific dist path (dynamic to avoid bundler resolving dead branches)
   const p = platform()
   const a = arch()
+  const target = `${p}-${a}`
 
-  if (p === "darwin" && a === "arm64") {
-    return require("../dist/darwin-arm64/ghostty-opentui.node")
-  }
-  if (p === "darwin" && a === "x64") {
-    return require("../dist/darwin-x64/ghostty-opentui.node")
-  }
-  if (p === "linux" && a === "arm64") {
-    return require("../dist/linux-arm64/ghostty-opentui.node")
-  }
-  if (p === "linux" && a === "x64") {
-    return require("../dist/linux-x64/ghostty-opentui.node")
-  }
+  if (p === "win32" && a !== "x64") return null
 
-  if (p === "win32" && a === "x64") {
-    return require("../dist/win32-x64/ghostty-opentui.node")
-  }
+  try {
+    return require(path.join(dir, "dist", target, "ghostty-opentui.node"))
+  } catch {}
 
-  // Windows non-x64 fallback
-  if (p === "win32") {
-    return null
-  }
-
-  throw new Error(`Unsupported platform: ${p}-${a}`)
+  throw new Error(`Unsupported platform: ${target}`)
 }
 
 const native = loadNativeModule()
