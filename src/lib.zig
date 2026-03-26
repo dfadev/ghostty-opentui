@@ -149,12 +149,11 @@ pub fn writeJsonOutput(
     offset: usize,
     limit: ?usize,
     cursor_style_set: bool,
+    total_lines: usize,
 ) !void {
     const screen = t.screens.active;
     const palette = &t.colors.palette.current;
     const terminal_bg = t.colors.background.get();
-
-    const total_lines = countLines(screen);
 
     // Check if cursor is visible (DECTCEM mode - DEC text cursor enable mode)
     const cursor_visible = t.modes.get(.cursor_visible);
@@ -293,6 +292,178 @@ pub fn writeJsonOutput(
     try writer.writeAll("]}");
 }
 
+// =============================================================================
+// Binary cell export
+// =============================================================================
+
+/// Write a binary span: [u16 width][3×u8 fg_rgb][u8 fg_present][3×u8 bg_rgb][u8 bg_present][u8 flags][u8 pad][u16 text_len][text_bytes...]
+fn writeBinarySpan(writer: anytype, style: CellStyle, text: []const u8, width: u16) !void {
+    try writer.writeInt(u16, width, .little);
+    // fg
+    if (style.fg) |c| {
+        try writer.writeByte(c.r);
+        try writer.writeByte(c.g);
+        try writer.writeByte(c.b);
+        try writer.writeByte(1);
+    } else {
+        try writer.writeByteNTimes(0, 4);
+    }
+    // bg
+    if (style.bg) |c| {
+        try writer.writeByte(c.r);
+        try writer.writeByte(c.g);
+        try writer.writeByte(c.b);
+        try writer.writeByte(1);
+    } else {
+        try writer.writeByteNTimes(0, 4);
+    }
+    try writer.writeByte(style.flags.toInt());
+    try writer.writeByte(0); // pad
+    try writer.writeInt(u16, @intCast(text.len), .little);
+    try writer.writeAll(text);
+}
+
+/// Write binary terminal output into an ArrayList so we can patch num_spans per row.
+pub fn writeBinaryOutput(
+    output: *std.ArrayListAligned(u8, null),
+    alloc: std.mem.Allocator,
+    t: *ghostty_vt.Terminal,
+    offset: usize,
+    limit: ?usize,
+    total_lines: usize,
+) !void {
+    const screen = t.screens.active;
+    const palette = &t.colors.palette.current;
+    const terminal_bg = t.colors.background.get();
+    const cursor_visible = t.modes.get(.cursor_visible);
+
+    const writer = output.writer(alloc);
+
+    // Count rows first so we can write num_rows in the header
+    var num_rows: u16 = 0;
+    {
+        var iter = screen.pages.rowIterator(.right_down, .{ .screen = .{} }, null);
+        var idx: usize = 0;
+        while (iter.next()) |_| {
+            if (idx < offset) {
+                idx += 1;
+                continue;
+            }
+            if (limit) |lim| {
+                if (num_rows >= lim) break;
+            }
+            num_rows += 1;
+            idx += 1;
+        }
+    }
+
+    // Header (24 bytes)
+    try writer.writeInt(u16, @intCast(screen.pages.cols), .little);
+    try writer.writeInt(u16, @intCast(screen.pages.rows), .little);
+    try writer.writeInt(u16, @intCast(screen.cursor.x), .little);
+    try writer.writeInt(u16, @intCast(screen.cursor.y), .little);
+    try writer.writeByte(if (cursor_visible) 1 else 0);
+    try writer.writeByteNTimes(0, 3); // pad
+    try writer.writeInt(u32, @intCast(offset), .little);
+    try writer.writeInt(u32, @intCast(total_lines), .little);
+    try writer.writeInt(u16, num_rows, .little);
+    try writer.writeByteNTimes(0, 2); // pad
+
+    var text_buf: [4096]u8 = undefined;
+    var row_iter = screen.pages.rowIterator(.right_down, .{ .screen = .{} }, null);
+    var row_idx: usize = 0;
+    var output_idx: usize = 0;
+
+    while (row_iter.next()) |pin| {
+        if (row_idx < offset) {
+            row_idx += 1;
+            continue;
+        }
+        if (limit) |lim| {
+            if (output_idx >= lim) break;
+        }
+
+        // Reserve 2 bytes for num_spans, will patch after processing row
+        const count_pos = output.items.len;
+        try writer.writeInt(u16, 0, .little); // placeholder
+
+        const cells = pin.cells(.all);
+
+        // Find last content column (same logic as writeJsonOutput)
+        var last_content_col: usize = 0;
+        for (cells, 0..) |*cell, col_idx| {
+            if (cell.wide == .spacer_tail) continue;
+            if (cell.codepoint() != 0) {
+                last_content_col = col_idx + 1;
+            }
+        }
+
+        // Extend for trailing styled empty cells (EL with background)
+        if (last_content_col < cells.len) {
+            var scan: usize = cells.len;
+            while (scan > last_content_col) {
+                scan -= 1;
+                const cell = &cells[scan];
+                if (cell.wide == .spacer_tail) continue;
+                if (cell.codepoint() != 0) break;
+                const style = getStyleFromCell(cell, pin, palette, terminal_bg);
+                if (style.bg != null) {
+                    last_content_col = scan + 1;
+                    break;
+                }
+            }
+        }
+
+        var span_len: u16 = 0;
+        var current_style: ?CellStyle = null;
+        var text_len: usize = 0;
+        var span_count: u16 = 0;
+
+        for (cells, 0..) |*cell, col_idx| {
+            if (cell.wide == .spacer_tail) continue;
+            if (col_idx >= last_content_col) break;
+
+            const raw_cp = cell.codepoint();
+            const cp: u32 = if (raw_cp == 0) ' ' else raw_cp;
+
+            const style = getStyleFromCell(cell, pin, palette, terminal_bg);
+            const style_changed = if (current_style) |cs| !cs.eql(style) else true;
+
+            if (style_changed and text_len > 0) {
+                try writeBinarySpan(writer, current_style.?, text_buf[0..text_len], span_len);
+                span_count += 1;
+                text_len = 0;
+                span_len = 0;
+            }
+
+            if (style_changed) {
+                current_style = style;
+            }
+
+            const cp21: u21 = @intCast(cp);
+            const len = std.unicode.utf8CodepointSequenceLength(cp21) catch 1;
+            if (text_len + len <= text_buf.len) {
+                _ = std.unicode.utf8Encode(cp21, text_buf[text_len..]) catch 0;
+                text_len += len;
+            }
+
+            span_len += if (cell.wide == .wide) 2 else 1;
+        }
+
+        // Flush last span
+        if (text_len > 0) {
+            try writeBinarySpan(writer, current_style.?, text_buf[0..text_len], span_len);
+            span_count += 1;
+        }
+
+        // Patch num_spans
+        std.mem.writeInt(u16, output.items[count_pos..][0..2], span_count, .little);
+
+        row_idx += 1;
+        output_idx += 1;
+    }
+}
+
 // Thread-local allocator for NAPI functions
 // The arena is reset at the START of each NAPI call, allowing the previous call's
 // return value to survive until napigen copies it to a JS string.
@@ -325,6 +496,13 @@ const PersistentTerminal = struct {
     /// and consumers should treat it as "default" (preserve the outer
     /// terminal's native cursor).
     cursor_style_set: bool = false,
+    /// Cached line count — lazily recomputed only after feed()/resize().
+    cached_lines: usize = 0,
+    lines_dirty: bool = true,
+    /// Generation counter for dirty tracking — increments on every feed().
+    generation: u64 = 0,
+    /// Generation at which data was last read (via getJson/getBinary).
+    last_read_gen: u64 = 0,
 
     pub fn init(alloc: std.mem.Allocator, cols: u16, rows: u16) !PersistentTerminal {
         var terminal = try ghostty_vt.Terminal.init(alloc, .{
@@ -372,6 +550,27 @@ const PersistentTerminal = struct {
                 self.cursor_style_set = true;
             }
         }
+        self.lines_dirty = true;
+        self.generation +%= 1;
+    }
+
+    /// Return cached total line count, recomputing only when dirty.
+    pub fn getTotalLines(self: *PersistentTerminal) usize {
+        if (self.lines_dirty) {
+            self.cached_lines = countLines(self.terminal.screens.active);
+            self.lines_dirty = false;
+        }
+        return self.cached_lines;
+    }
+
+    /// Returns true if terminal content has changed since the last read.
+    pub fn isDirty(self: *const PersistentTerminal) bool {
+        return self.generation != self.last_read_gen;
+    }
+
+    /// Mark the terminal as clean (called after reading data).
+    pub fn markClean(self: *PersistentTerminal) void {
+        self.last_read_gen = self.generation;
     }
 
     /// Returns true if the parser is in ground state, meaning all escape
@@ -385,6 +584,8 @@ const PersistentTerminal = struct {
 
     pub fn resize(self: *PersistentTerminal, cols: u16, rows: u16) !void {
         try self.terminal.resize(self.allocator, cols, rows);
+        self.lines_dirty = true;
+        self.generation +%= 1;
     }
 
     pub fn reset(self: *PersistentTerminal) void {
@@ -395,6 +596,10 @@ const PersistentTerminal = struct {
             s.deinit();
         }
         self.stream = self.terminal.vtStream();
+        self.cached_lines = 0;
+        self.lines_dirty = false;
+        self.generation = 0;
+        self.last_read_gen = 0;
     }
 };
 
@@ -499,7 +704,7 @@ fn getTerminalJson(id: u32, offset: u32, limit: u32) ![]const u8 {
     const lim: ?usize = if (limit == 0) null else @intCast(limit);
 
     var output: std.ArrayListAligned(u8, null) = .empty;
-    try writeJsonOutput(output.writer(alloc), &term.terminal, @intCast(offset), lim, term.cursor_style_set);
+    try writeJsonOutput(output.writer(alloc), &term.terminal, @intCast(offset), lim, term.cursor_style_set, term.getTotalLines());
 
     return output.items;
 }
@@ -545,7 +750,7 @@ fn getTerminalTotalLines(id: u32) !u32 {
     const map = getTerminalsMap();
     const term = map.get(id) orelse return error.TerminalNotFound;
 
-    return @intCast(countLines(term.terminal.screens.active));
+    return @intCast(term.getTotalLines());
 }
 
 fn isTerminalReady(id: u32) !bool {
@@ -556,6 +761,28 @@ fn isTerminalReady(id: u32) !bool {
     const term = map.get(id) orelse return error.TerminalNotFound;
 
     return term.isReady();
+}
+
+/// Check if terminal content has changed since last markClean
+fn isTerminalDirty(id: u32) !bool {
+    terminals_mutex.lock();
+    defer terminals_mutex.unlock();
+
+    const map = getTerminalsMap();
+    const term = map.get(id) orelse return error.TerminalNotFound;
+
+    return term.isDirty();
+}
+
+/// Mark terminal as clean (content has been read)
+fn markTerminalClean(id: u32) !void {
+    terminals_mutex.lock();
+    defer terminals_mutex.unlock();
+
+    const map = getTerminalsMap();
+    const term = map.get(id) orelse return error.TerminalNotFound;
+
+    term.markClean();
 }
 
 /// Convert PTY input to JSON format
@@ -612,7 +839,7 @@ fn ptyToJson(input: []const u8, cols: u32, rows: u32, offset: u32, limit: u32) !
     const cursor_style_set = t.screens.active.cursor.cursor_style != style_before;
 
     var output: std.ArrayListAligned(u8, null) = .empty;
-    try writeJsonOutput(output.writer(alloc), &t, @intCast(offset), lim, cursor_style_set);
+    try writeJsonOutput(output.writer(alloc), &t, @intCast(offset), lim, cursor_style_set, countLines(t.screens.active));
 
     return output.items;
 }
@@ -682,6 +909,37 @@ comptime {
     }
 }
 
+/// Get binary cell data from a persistent terminal, returned as a Node.js Buffer.
+/// Uses napigen escape hatch: accepts *JsContext (auto-injected), returns raw napi_value.
+/// The JS caller passes (id, offset, limit) — three args.
+fn getTerminalCells(js: *napigen.JsContext, id: u32, offset: u32, limit: u32) !napigen.napi_value {
+    terminals_mutex.lock();
+    defer terminals_mutex.unlock();
+
+    const map = getTerminalsMap();
+    const term = map.get(id) orelse return error.TerminalNotFound;
+
+    const alloc = getArenaAllocator();
+    const lim: ?usize = if (limit == 0) null else @intCast(limit);
+
+    var output: std.ArrayListAligned(u8, null) = .empty;
+    try writeBinaryOutput(&output, alloc, &term.terminal, @intCast(offset), lim, term.getTotalLines());
+
+    // Return as Node.js Buffer via napi_create_buffer_copy.
+    // This copies our bytes into V8-managed memory. The arena memory is freed
+    // on the next N-API call as usual.
+    var result: napigen.napi_value = undefined;
+    const status = napigen.napi.napi_create_buffer_copy(
+        js.env,
+        output.items.len,
+        @ptrCast(output.items.ptr),
+        null,
+        &result,
+    );
+    if (status != 0) return error.NapiBufferCreateFailed;
+    return result;
+}
+
 fn initModule(js: *napigen.JsContext, exports: napigen.napi_value) anyerror!napigen.napi_value {
     // Stateless functions (create terminal each call)
     try js.setNamedProperty(exports, "ptyToJson", try js.createFunction(ptyToJson));
@@ -699,6 +957,9 @@ fn initModule(js: *napigen.JsContext, exports: napigen.napi_value) anyerror!napi
     try js.setNamedProperty(exports, "getTerminalCursor", try js.createFunction(getTerminalCursor));
     try js.setNamedProperty(exports, "getTerminalTotalLines", try js.createFunction(getTerminalTotalLines));
     try js.setNamedProperty(exports, "isTerminalReady", try js.createFunction(isTerminalReady));
+    try js.setNamedProperty(exports, "getTerminalCells", try js.createFunction(getTerminalCells));
+    try js.setNamedProperty(exports, "isTerminalDirty", try js.createFunction(isTerminalDirty));
+    try js.setNamedProperty(exports, "markTerminalClean", try js.createFunction(markTerminalClean));
 
     return exports;
 }
@@ -719,7 +980,7 @@ test "basic JSON output" {
     var output: std.ArrayListAligned(u8, null) = .empty;
     defer output.deinit(alloc);
 
-    try writeJsonOutput(output.writer(alloc), &t, 0, null, false);
+    try writeJsonOutput(output.writer(alloc), &t, 0, null, false, countLines(t.screens.active));
 
     const json = output.items;
     try testing.expect(std.mem.indexOf(u8, json, "\"cols\":80") != null);
@@ -905,7 +1166,7 @@ test "PersistentTerminal preserves state across feeds" {
     var output: std.ArrayListAligned(u8, null) = .empty;
     defer output.deinit(alloc);
 
-    try writeJsonOutput(output.writer(alloc), &term.terminal, 0, null, false);
+    try writeJsonOutput(output.writer(alloc), &term.terminal, 0, null, false, countLines(term.terminal.screens.active));
 
     const json = output.items;
     try testing.expect(std.mem.indexOf(u8, json, "Green Text") != null);
@@ -932,6 +1193,76 @@ test "PersistentTerminal handles cursor movement" {
     try testing.expectEqual(@as(usize, 6), term.terminal.screens.active.cursor.x);
 }
 
+test "PersistentTerminal getTotalLines caches" {
+    const alloc = testing.allocator;
+
+    var term = try PersistentTerminal.init(alloc, 80, 24);
+    term.initStream();
+    defer term.deinit();
+
+    // Initial state: dirty, no cached value
+    try testing.expect(term.lines_dirty);
+
+    const lines1 = term.getTotalLines();
+    try testing.expectEqual(@as(usize, 24), lines1);
+    try testing.expect(!term.lines_dirty); // now clean
+
+    // Second call without feed should return cached value
+    const lines2 = term.getTotalLines();
+    try testing.expectEqual(lines1, lines2);
+    try testing.expect(!term.lines_dirty); // still clean
+
+    // Feed data — should mark dirty
+    try term.feed("Line 1\nLine 2\nLine 3\n");
+    try testing.expect(term.lines_dirty);
+
+    // Next call recomputes
+    const lines3 = term.getTotalLines();
+    try testing.expect(!term.lines_dirty);
+    try testing.expect(lines3 >= 24); // at least 24 rows
+
+    // Resize should mark dirty
+    try term.resize(40, 10);
+    try testing.expect(term.lines_dirty);
+
+    // Reset should set clean with 0 cached
+    term.reset();
+    try testing.expect(!term.lines_dirty);
+    try testing.expectEqual(@as(usize, 0), term.cached_lines);
+}
+
+test "PersistentTerminal dirty tracking" {
+    const alloc = testing.allocator;
+
+    var term = try PersistentTerminal.init(alloc, 80, 24);
+    term.initStream();
+    defer term.deinit();
+
+    // Initially dirty (generation 0, last_read_gen 0 — but no feeds yet)
+    try testing.expect(!term.isDirty()); // gen == last_read_gen == 0
+
+    // Feed data — marks dirty
+    try term.feed("Hello");
+    try testing.expect(term.isDirty());
+
+    // Mark clean
+    term.markClean();
+    try testing.expect(!term.isDirty());
+
+    // Feed again — dirty again
+    try term.feed(" World");
+    try testing.expect(term.isDirty());
+
+    // Resize also marks dirty
+    term.markClean();
+    try term.resize(40, 10);
+    try testing.expect(term.isDirty());
+
+    // Reset clears dirty state
+    term.reset();
+    try testing.expect(!term.isDirty());
+}
+
 test "normal text does not get trailing padding" {
     const alloc = testing.allocator;
 
@@ -947,7 +1278,7 @@ test "normal text does not get trailing padding" {
     var output: std.ArrayListAligned(u8, null) = .empty;
     defer output.deinit(alloc);
 
-    try writeJsonOutput(output.writer(alloc), &t, 0, null, false);
+    try writeJsonOutput(output.writer(alloc), &t, 0, null, false, countLines(t.screens.active));
 
     const json = output.items;
     // Should have "Hello" with width 5, NOT padded to 80
@@ -970,10 +1301,152 @@ test "background color with EL extends to full line width" {
     var output: std.ArrayListAligned(u8, null) = .empty;
     defer output.deinit(alloc);
 
-    try writeJsonOutput(output.writer(alloc), &t, 0, null, false);
+    try writeJsonOutput(output.writer(alloc), &t, 0, null, false, countLines(t.screens.active));
 
     const json = output.items;
 
     // Should have a span extending to 20 columns with a background color
     try testing.expect(std.mem.indexOf(u8, json, ",80]") != null);
+}
+
+// =============================================================================
+// Binary output tests
+// =============================================================================
+
+test "writeBinaryOutput header fields match writeJsonOutput" {
+    const alloc = testing.allocator;
+
+    var t: ghostty_vt.Terminal = try .init(alloc, .{ .cols = 80, .rows = 24 });
+    defer t.deinit(alloc);
+
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    try stream.nextSlice("Hello World");
+
+    const total = countLines(t.screens.active);
+
+    // Get binary output
+    var bin: std.ArrayListAligned(u8, null) = .empty;
+    defer bin.deinit(alloc);
+    try writeBinaryOutput(&bin, alloc, &t, 0, null, total);
+
+    // Parse binary header (24 bytes)
+    const view = bin.items;
+    try testing.expect(view.len >= 24);
+
+    const cols = std.mem.readInt(u16, view[0..2], .little);
+    const rows = std.mem.readInt(u16, view[2..4], .little);
+    const cursor_x = std.mem.readInt(u16, view[4..6], .little);
+    const cursor_y = std.mem.readInt(u16, view[6..8], .little);
+    const visible = view[8];
+    const offset_val = std.mem.readInt(u32, view[12..16], .little);
+    const total_val = std.mem.readInt(u32, view[16..20], .little);
+    const num_rows = std.mem.readInt(u16, view[20..22], .little);
+
+    try testing.expectEqual(@as(u16, 80), cols);
+    try testing.expectEqual(@as(u16, 24), rows);
+    try testing.expectEqual(@as(u16, 11), cursor_x); // "Hello World" = 11 chars
+    try testing.expectEqual(@as(u16, 0), cursor_y);
+    try testing.expectEqual(@as(u8, 1), visible); // cursor visible by default
+    try testing.expectEqual(@as(u32, 0), offset_val);
+    try testing.expectEqual(@as(u32, @intCast(total)), total_val);
+    try testing.expectEqual(@as(u16, @intCast(total)), num_rows);
+}
+
+test "writeBinaryOutput span text matches" {
+    const alloc = testing.allocator;
+
+    var t: ghostty_vt.Terminal = try .init(alloc, .{ .cols = 80, .rows = 24 });
+    defer t.deinit(alloc);
+
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    try stream.nextSlice("Hello");
+
+    const total = countLines(t.screens.active);
+
+    var bin: std.ArrayListAligned(u8, null) = .empty;
+    defer bin.deinit(alloc);
+    try writeBinaryOutput(&bin, alloc, &t, 0, null, total);
+
+    const view = bin.items;
+    // Skip 24-byte header, first row starts with num_spans (u16)
+    var pos: usize = 24;
+    const num_spans = std.mem.readInt(u16, view[pos..][0..2], .little);
+    pos += 2;
+
+    // First row should have exactly 1 span with "Hello"
+    try testing.expectEqual(@as(u16, 1), num_spans);
+
+    // Read first span: width (u16) + fg(3+1) + bg(3+1) + flags(1) + pad(1) + text_len(u16) + text
+    const width = std.mem.readInt(u16, view[pos..][0..2], .little);
+    pos += 2;
+    try testing.expectEqual(@as(u16, 5), width);
+
+    // Skip fg(4) + bg(4) + flags(1) + pad(1) = 10 bytes
+    pos += 10;
+
+    const text_len = std.mem.readInt(u16, view[pos..][0..2], .little);
+    pos += 2;
+    try testing.expectEqual(@as(u16, 5), text_len);
+
+    try testing.expectEqualStrings("Hello", view[pos .. pos + text_len]);
+}
+
+test "writeBinaryOutput preserves RGB color bytes" {
+    const alloc = testing.allocator;
+
+    var t: ghostty_vt.Terminal = try .init(alloc, .{ .cols = 80, .rows = 24 });
+    defer t.deinit(alloc);
+
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    // Set fg to RGB(200, 128, 255) — tests high-byte values that would corrupt via UTF-8
+    try stream.nextSlice("\x1b[38;2;200;128;255mX\x1b[0m");
+
+    const total = countLines(t.screens.active);
+
+    var bin: std.ArrayListAligned(u8, null) = .empty;
+    defer bin.deinit(alloc);
+    try writeBinaryOutput(&bin, alloc, &t, 0, null, total);
+
+    const view = bin.items;
+    // Header (24) + num_spans (2) = 26, then first span: width (2) + fg_r, fg_g, fg_b, fg_present
+    const pos: usize = 24 + 2 + 2; // header + num_spans + width
+
+    try testing.expectEqual(@as(u8, 200), view[pos]); // fg_r
+    try testing.expectEqual(@as(u8, 128), view[pos + 1]); // fg_g
+    try testing.expectEqual(@as(u8, 255), view[pos + 2]); // fg_b
+    try testing.expectEqual(@as(u8, 1), view[pos + 3]); // fg_present
+}
+
+test "writeBinaryOutput with offset and limit" {
+    const alloc = testing.allocator;
+
+    var t: ghostty_vt.Terminal = try .init(alloc, .{ .cols = 80, .rows = 24 });
+    defer t.deinit(alloc);
+
+    t.modes.set(.linefeed, true);
+
+    var stream = t.vtStream();
+    defer stream.deinit();
+
+    try stream.nextSlice("Line0\nLine1\nLine2\nLine3\n");
+
+    const total = countLines(t.screens.active);
+
+    // Request rows 1..3 (offset=1, limit=2)
+    var bin: std.ArrayListAligned(u8, null) = .empty;
+    defer bin.deinit(alloc);
+    try writeBinaryOutput(&bin, alloc, &t, 1, 2, total);
+
+    const view = bin.items;
+    const offset_val = std.mem.readInt(u32, view[12..16], .little);
+    const num_rows = std.mem.readInt(u16, view[20..22], .little);
+
+    try testing.expectEqual(@as(u32, 1), offset_val);
+    try testing.expectEqual(@as(u16, 2), num_rows);
 }
