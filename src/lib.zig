@@ -124,12 +124,7 @@ fn writeColor(writer: anytype, rgb: ?color.RGB) !void {
 
 /// Count total lines in terminal screen
 fn countLines(screen: *Screen) usize {
-    var total: usize = 0;
-    var iter = screen.pages.rowIterator(.right_down, .{ .screen = .{} }, null);
-    while (iter.next()) |_| {
-        total += 1;
-    }
-    return total;
+    return screen.pages.total_rows;
 }
 
 /// Check if terminal has at least `threshold` lines - O(threshold) not O(total)
@@ -175,16 +170,15 @@ pub fn writeJsonOutput(
     try writer.writeAll("\"lines\":[");
 
     var text_buf: [4096]u8 = undefined;
-    var row_iter = screen.pages.rowIterator(.right_down, .{ .screen = .{} }, null);
-    var row_idx: usize = 0;
+    // Start iteration directly at `offset` — O(1) seek via Point.screen
+    var row_iter = screen.pages.rowIterator(
+        .right_down,
+        .{ .screen = .{ .y = @intCast(offset) } },
+        null,
+    );
     var output_idx: usize = 0;
 
     while (row_iter.next()) |pin| {
-        if (row_idx < offset) {
-            row_idx += 1;
-            continue;
-        }
-
         if (limit) |lim| {
             if (output_idx >= lim) break;
         }
@@ -285,7 +279,6 @@ pub fn writeJsonOutput(
         }
 
         try writer.writeByte(']');
-        row_idx += 1;
         output_idx += 1;
     }
 
@@ -348,25 +341,7 @@ pub fn writeBinaryOutput(
 
     const writer = output.writer(alloc);
 
-    // Count rows first so we can write num_rows in the header
-    var num_rows: u16 = 0;
-    {
-        var iter = screen.pages.rowIterator(.right_down, .{ .screen = .{} }, null);
-        var idx: usize = 0;
-        while (iter.next()) |_| {
-            if (idx < offset) {
-                idx += 1;
-                continue;
-            }
-            if (limit) |lim| {
-                if (num_rows >= lim) break;
-            }
-            num_rows += 1;
-            idx += 1;
-        }
-    }
-
-    // Header (24 bytes)
+    // Header (24 bytes) — num_rows placeholder patched after the loop
     try writer.writeInt(u16, @intCast(screen.pages.cols), .little);
     try writer.writeInt(u16, @intCast(screen.pages.rows), .little);
     try writer.writeInt(u16, @intCast(screen.cursor.x), .little);
@@ -376,21 +351,22 @@ pub fn writeBinaryOutput(
     try writer.writeByteNTimes(0, 2); // pad
     try writer.writeInt(u32, @intCast(offset), .little);
     try writer.writeInt(u32, @intCast(total_lines), .little);
-    try writer.writeInt(u16, num_rows, .little);
+    const num_rows_pos = output.items.len;
+    try writer.writeInt(u16, 0, .little); // placeholder — patched below
     try writer.writeByteNTimes(0, 2); // pad
 
+    // Start iteration directly at `offset` using Point.screen — O(1) seek
     var text_buf: [4096]u8 = undefined;
-    var row_iter = screen.pages.rowIterator(.right_down, .{ .screen = .{} }, null);
-    var row_idx: usize = 0;
-    var output_idx: usize = 0;
+    var row_iter = screen.pages.rowIterator(
+        .right_down,
+        .{ .screen = .{ .y = @intCast(offset) } },
+        null,
+    );
+    var num_rows: u16 = 0;
 
     while (row_iter.next()) |pin| {
-        if (row_idx < offset) {
-            row_idx += 1;
-            continue;
-        }
         if (limit) |lim| {
-            if (output_idx >= lim) break;
+            if (num_rows >= lim) break;
         }
 
         // Reserve 2 bytes for num_spans, will patch after processing row
@@ -469,9 +445,11 @@ pub fn writeBinaryOutput(
         // Patch num_spans
         std.mem.writeInt(u16, output.items[count_pos..][0..2], span_count, .little);
 
-        row_idx += 1;
-        output_idx += 1;
+        num_rows += 1;
     }
+
+    // Patch num_rows in header
+    std.mem.writeInt(u16, output.items[num_rows_pos..][0..2], num_rows, .little);
 }
 
 // Thread-local allocator for NAPI functions
@@ -506,9 +484,7 @@ const PersistentTerminal = struct {
     /// and consumers should treat it as "default" (preserve the outer
     /// terminal's native cursor).
     cursor_style_set: bool = false,
-    /// Cached line count — lazily recomputed only after feed()/resize().
-    cached_lines: usize = 0,
-    lines_dirty: bool = true,
+
     /// Generation counter for dirty tracking — increments on every feed().
     generation: u64 = 0,
     /// Generation at which data was last read (via getJson/getBinary).
@@ -560,17 +536,12 @@ const PersistentTerminal = struct {
                 self.cursor_style_set = true;
             }
         }
-        self.lines_dirty = true;
         self.generation +%= 1;
     }
 
-    /// Return cached total line count, recomputing only when dirty.
+    /// Return total line count — O(1) via Ghostty's maintained total_rows.
     pub fn getTotalLines(self: *PersistentTerminal) usize {
-        if (self.lines_dirty) {
-            self.cached_lines = countLines(self.terminal.screens.active);
-            self.lines_dirty = false;
-        }
-        return self.cached_lines;
+        return countLines(self.terminal.screens.active);
     }
 
     /// Returns true if terminal content has changed since the last read.
@@ -594,7 +565,6 @@ const PersistentTerminal = struct {
 
     pub fn resize(self: *PersistentTerminal, cols: u16, rows: u16) !void {
         try self.terminal.resize(self.allocator, cols, rows);
-        self.lines_dirty = true;
         self.generation +%= 1;
     }
 
@@ -606,8 +576,6 @@ const PersistentTerminal = struct {
             s.deinit();
         }
         self.stream = self.terminal.vtStream();
-        self.cached_lines = 0;
-        self.lines_dirty = false;
         self.generation = 0;
         self.last_read_gen = 0;
     }
@@ -1203,42 +1171,26 @@ test "PersistentTerminal handles cursor movement" {
     try testing.expectEqual(@as(usize, 6), term.terminal.screens.active.cursor.x);
 }
 
-test "PersistentTerminal getTotalLines caches" {
+test "PersistentTerminal getTotalLines is O(1)" {
     const alloc = testing.allocator;
 
     var term = try PersistentTerminal.init(alloc, 80, 24);
     term.initStream();
     defer term.deinit();
 
-    // Initial state: dirty, no cached value
-    try testing.expect(term.lines_dirty);
+    // Initial state: 24 rows (empty terminal has screen-height rows)
+    try testing.expectEqual(@as(usize, 24), term.getTotalLines());
 
-    const lines1 = term.getTotalLines();
-    try testing.expectEqual(@as(usize, 24), lines1);
-    try testing.expect(!term.lines_dirty); // now clean
+    // Consistent across calls
+    try testing.expectEqual(term.getTotalLines(), term.getTotalLines());
 
-    // Second call without feed should return cached value
-    const lines2 = term.getTotalLines();
-    try testing.expectEqual(lines1, lines2);
-    try testing.expect(!term.lines_dirty); // still clean
-
-    // Feed data — should mark dirty
+    // Feed data — line count grows
     try term.feed("Line 1\nLine 2\nLine 3\n");
-    try testing.expect(term.lines_dirty);
+    try testing.expect(term.getTotalLines() >= 24);
 
-    // Next call recomputes
-    const lines3 = term.getTotalLines();
-    try testing.expect(!term.lines_dirty);
-    try testing.expect(lines3 >= 24); // at least 24 rows
-
-    // Resize should mark dirty
+    // Resize
     try term.resize(40, 10);
-    try testing.expect(term.lines_dirty);
-
-    // Reset should set clean with 0 cached
-    term.reset();
-    try testing.expect(!term.lines_dirty);
-    try testing.expectEqual(@as(usize, 0), term.cached_lines);
+    try testing.expect(term.getTotalLines() >= 10);
 }
 
 test "PersistentTerminal dirty tracking" {

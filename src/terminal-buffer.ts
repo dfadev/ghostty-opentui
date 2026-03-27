@@ -8,9 +8,16 @@ import {
   type RenderContext,
   type TextChunk,
   type OptimizedBuffer,
-} from "@opentui/core"
-import { ptyToJson, PersistentTerminal, hasPersistentTerminalSupport, type TerminalData, type TerminalSpan, StyleFlags } from "./ffi.js"
-import wcwidth from "wcwidth"
+} from "@opentui/core";
+import {
+  ptyToJson,
+  PersistentTerminal,
+  hasPersistentTerminalSupport,
+  type TerminalData,
+  type TerminalSpan,
+  StyleFlags,
+} from "./ffi.js";
+import wcwidth from "wcwidth";
 
 const colorCache = new Map<string, RGBA>();
 
@@ -26,25 +33,26 @@ const DEFAULT_FG = cachedColor("#d4d4d4");
 const DEFAULT_BG = cachedColor("#1e1e1e");
 
 type WidthAwareChunk = TextChunk & {
-  cellWidth: number
-}
+  cellWidth: number;
+};
 
 function getChunkCellWidth(chunk: TextChunk): number {
-  return "cellWidth" in chunk && typeof (chunk as WidthAwareChunk).cellWidth === "number"
+  return "cellWidth" in chunk &&
+    typeof (chunk as WidthAwareChunk).cellWidth === "number"
     ? (chunk as WidthAwareChunk).cellWidth
-    : wcwidth(chunk.text)
+    : wcwidth(chunk.text);
 }
 
 function cellColToStringIndex(text: string, cellCol: number): number {
-  if (cellCol <= 0) return 0
-  let col = 0
-  let strIdx = 0
+  if (cellCol <= 0) return 0;
+  let col = 0;
+  let strIdx = 0;
   for (const ch of text) {
-    if (col >= cellCol) break
-    col += wcwidth(ch)
-    strIdx += ch.length
+    if (col >= cellCol) break;
+    col += wcwidth(ch);
+    strIdx += ch.length;
   }
-  return strIdx
+  return strIdx;
 }
 
 /**
@@ -75,16 +83,16 @@ const TextAttributes = {
 };
 
 interface LineInfoWithStarts {
-  lineStarts?: number[]
-  lineStartCols?: number[]
+  lineStarts?: number[];
+  lineStartCols?: number[];
 }
 
 function getLineStarts(lineInfo: LineInfoWithStarts): number[] {
-  return lineInfo.lineStarts ?? lineInfo.lineStartCols ?? []
+  return lineInfo.lineStarts ?? lineInfo.lineStartCols ?? [];
 }
 
 function convertSpanToChunk(span: TerminalSpan): WidthAwareChunk {
-  const { text, fg, bg, flags, width } = span
+  const { text, fg, bg, flags, width } = span;
 
   let fgColor = fg ? cachedColor(fg) : DEFAULT_FG;
   let bgColor = bg ? cachedColor(bg) : undefined;
@@ -103,7 +111,14 @@ function convertSpanToChunk(span: TerminalSpan): WidthAwareChunk {
     attributes |= TextAttributes.STRIKETHROUGH;
   if (flags & StyleFlags.FAINT) attributes |= TextAttributes.DIM;
 
-  return { __isChunk: true, text, fg: fgColor, bg: bgColor, attributes, cellWidth: width }
+  return {
+    __isChunk: true,
+    text,
+    fg: fgColor,
+    bg: bgColor,
+    attributes,
+    cellWidth: width,
+  };
 }
 
 /**
@@ -120,56 +135,64 @@ export function applyHighlightsToLine(
   let col = 0;
 
   for (const chunk of chunks) {
-    const w = getChunkCellWidth(chunk)
-    const chunkStart = col
-    const chunkEnd = col + w
+    const w = getChunkCellWidth(chunk);
+    const chunkStart = col;
+    const chunkEnd = col + w;
 
     // Find all highlights that overlap with this chunk
     const overlapping = highlights
       .filter((hl) => hl.start < chunkEnd && hl.end > chunkStart)
-      .sort((a, b) => a.start - b.start)
+      .sort((a, b) => a.start - b.start);
 
     if (overlapping.length === 0) {
-      result.push(chunk)
-      col = chunkEnd
-      continue
+      result.push(chunk);
+      col = chunkEnd;
+      continue;
     }
 
     // Split chunk at highlight boundaries
-    let cellPos = 0
+    let cellPos = 0;
 
     for (const hl of overlapping) {
-      const hlStartLocal = Math.max(0, hl.start - chunkStart)
-      const hlEndLocal = Math.min(w, hl.end - chunkStart)
+      const hlStartLocal = Math.max(0, hl.start - chunkStart);
+      const hlEndLocal = Math.min(w, hl.end - chunkStart);
 
       // Text before highlight
       if (cellPos < hlStartLocal) {
-        const startStr = cellColToStringIndex(chunk.text, cellPos)
-        const endStr = cellColToStringIndex(chunk.text, hlStartLocal)
-        result.push({ ...chunk, text: chunk.text.slice(startStr, endStr), cellWidth: hlStartLocal - cellPos } as TextChunk)
+        const startStr = cellColToStringIndex(chunk.text, cellPos);
+        const endStr = cellColToStringIndex(chunk.text, hlStartLocal);
+        result.push({
+          ...chunk,
+          text: chunk.text.slice(startStr, endStr),
+          cellWidth: hlStartLocal - cellPos,
+        } as TextChunk);
       }
 
       // Highlighted text
       if (hlStartLocal < hlEndLocal) {
-        const startStr = cellColToStringIndex(chunk.text, hlStartLocal)
-        const endStr = cellColToStringIndex(chunk.text, hlEndLocal)
-        const hlText = chunk.text.slice(startStr, endStr)
-        const cellWidth = hlEndLocal - hlStartLocal
+        const startStr = cellColToStringIndex(chunk.text, hlStartLocal);
+        const endStr = cellColToStringIndex(chunk.text, hlEndLocal);
+        const hlText = chunk.text.slice(startStr, endStr);
+        const cellWidth = hlEndLocal - hlStartLocal;
         result.push({
           ...chunk,
           text: hl.replaceWithX ? "x".repeat(cellWidth) : hlText,
           bg: RGBA.fromHex(hl.backgroundColor),
           cellWidth,
-        } as TextChunk)
+        } as TextChunk);
       }
 
-      cellPos = hlEndLocal
+      cellPos = hlEndLocal;
     }
 
     // Text after last highlight
     if (cellPos < w) {
-      const startStr = cellColToStringIndex(chunk.text, cellPos)
-      result.push({ ...chunk, text: chunk.text.slice(startStr), cellWidth: w - cellPos } as TextChunk)
+      const startStr = cellColToStringIndex(chunk.text, cellPos);
+      result.push({
+        ...chunk,
+        text: chunk.text.slice(startStr),
+        cellWidth: w - cellPos,
+      } as TextChunk);
     }
 
     col = chunkEnd;
@@ -193,7 +216,7 @@ function makeCursorChunk(
   style: "block" | "underline",
   original?: TextChunk,
 ): WidthAwareChunk {
-  const cellWidth = Math.max(1, wcwidth(char))
+  const cellWidth = Math.max(1, wcwidth(char));
 
   if (style === "block") {
     return {
@@ -203,7 +226,7 @@ function makeCursorChunk(
       bg: original?.fg || DEFAULT_FG,
       attributes: original?.attributes ?? 0,
       cellWidth,
-    }
+    };
   }
   return {
     __isChunk: true,
@@ -212,7 +235,7 @@ function makeCursorChunk(
     bg: original?.bg,
     attributes: (original?.attributes ?? 0) | TextAttributes.UNDERLINE,
     cellWidth,
-  }
+  };
 }
 
 /**
@@ -225,13 +248,25 @@ function applyCursorToLine(
   cursorX: number,
   cursorStyle: "block" | "underline",
 ): TextChunk[] {
-  const totalLen = chunks.reduce((sum, chunk) => sum + getChunkCellWidth(chunk), 0)
+  const totalLen = chunks.reduce(
+    (sum, chunk) => sum + getChunkCellWidth(chunk),
+    0,
+  );
 
   // Cursor beyond line content - pad with spaces then append cursor
   if (cursorX >= totalLen) {
     const gap = cursorX - totalLen;
     if (gap > 0) {
-      return [...chunks, { __isChunk: true, text: " ".repeat(gap), attributes: 0, cellWidth: gap } as WidthAwareChunk, makeCursorChunk(" ", cursorStyle)]
+      return [
+        ...chunks,
+        {
+          __isChunk: true,
+          text: " ".repeat(gap),
+          attributes: 0,
+          cellWidth: gap,
+        } as WidthAwareChunk,
+        makeCursorChunk(" ", cursorStyle),
+      ];
     }
     return [...chunks, makeCursorChunk(" ", cursorStyle)];
   }
@@ -241,21 +276,21 @@ function applyCursorToLine(
   let col = 0;
 
   for (const chunk of chunks) {
-    const w = getChunkCellWidth(chunk)
-    const chunkEnd = col + w
+    const w = getChunkCellWidth(chunk);
+    const chunkEnd = col + w;
 
     if (cursorX >= col && cursorX < chunkEnd) {
-      const localCol = cursorX - col
-      const strIdx = cellColToStringIndex(chunk.text, localCol)
-      const cursorChar = String.fromCodePoint(chunk.text.codePointAt(strIdx)!)
-      const strEnd = strIdx + cursorChar.length
+      const localCol = cursorX - col;
+      const strIdx = cellColToStringIndex(chunk.text, localCol);
+      const cursorChar = String.fromCodePoint(chunk.text.codePointAt(strIdx)!);
+      const strEnd = strIdx + cursorChar.length;
 
       if (strIdx > 0) {
-        result.push({ ...chunk, text: chunk.text.slice(0, strIdx) })
+        result.push({ ...chunk, text: chunk.text.slice(0, strIdx) });
       }
-      result.push(makeCursorChunk(cursorChar, cursorStyle, chunk))
+      result.push(makeCursorChunk(cursorChar, cursorStyle, chunk));
       if (strEnd < chunk.text.length) {
-        result.push({ ...chunk, text: chunk.text.slice(strEnd) })
+        result.push({ ...chunk, text: chunk.text.slice(strEnd) });
       }
     } else {
       result.push(chunk);
@@ -338,34 +373,35 @@ export interface GhosttyTerminalOptions extends TextBufferOptions {
    * Cursor style: 'block' or 'underline'. When omitted, the terminal's
    * native cursor style is preserved (e.g. bar set via DECSCUSR).
    */
-  cursorStyle?: "block" | "underline"
+  cursorStyle?: "block" | "underline";
   /**
    * Whether this component participates in focus management.
    * When true, cursor rendering is gated on focus state.
    */
-  focusable?: boolean
+  focusable?: boolean;
 }
 
 /** @deprecated Use GhosttyTerminalOptions instead */
 export type TerminalBufferOptions = GhosttyTerminalOptions;
 
 export class GhosttyTerminalRenderable extends TextBufferRenderable {
-  private _ansi: string | Buffer | Uint8Array
-  private _cols: number
-  private _rows: number
-  private _limit?: number
-  private _trimEnd?: boolean
-  private _highlights?: HighlightRegion[]
-  private _ansiDirty: boolean = false
-  private _lineCount: number = 0
-  private _showCursor: boolean = false
-  private _cursorStyle: "block" | "underline" | undefined = undefined
+  private _ansi: string | Buffer | Uint8Array;
+  private _cols: number;
+  private _rows: number;
+  private _limit?: number;
+  private _trimEnd?: boolean;
+  private _highlights?: HighlightRegion[];
+  private _ansiDirty: boolean = false;
+  private _lineCount: number = 0;
+  private _scrollOffset?: number;
+  private _showCursor: boolean = false;
+  private _cursorStyle: "block" | "underline" | undefined = undefined;
   private _renderCursor = {
     x: 0,
     y: 0,
     visible: false,
     style: "default" as "default" | "block" | "line" | "underline",
-  }
+  };
 
   // Persistent terminal support
   private _persistent: boolean = false;
@@ -386,12 +422,12 @@ export class GhosttyTerminalRenderable extends TextBufferRenderable {
     this._highlights = options.highlights;
     this._persistent = options.persistent ?? false;
     this._showCursor = options.showCursor ?? false;
-    this._cursorStyle = options.cursorStyle
+    this._cursorStyle = options.cursorStyle;
 
     // TextBufferRenderable doesn't read options.focusable (only BoxRenderable does),
     // so we need to read it ourselves.
     if (options.focusable) {
-      this._focusable = true
+      this._focusable = true;
     }
 
     // Initialize persistent terminal if enabled
@@ -434,6 +470,22 @@ export class GhosttyTerminalRenderable extends TextBufferRenderable {
     }
   }
 
+  /**
+   * Scroll offset into the terminal scrollback. When undefined, follows the
+   * latest output (bottom of scrollback).
+   */
+  get scrollOffset(): number | undefined {
+    return this._scrollOffset;
+  }
+
+  set scrollOffset(value: number | undefined) {
+    if (this._scrollOffset !== value) {
+      this._scrollOffset = value;
+      this._ansiDirty = true;
+      this.requestRender();
+    }
+  }
+
   get trimEnd(): boolean | undefined {
     return this._trimEnd;
   }
@@ -469,7 +521,7 @@ export class GhosttyTerminalRenderable extends TextBufferRenderable {
   }
 
   get cursorStyle(): "block" | "underline" | undefined {
-    return this._cursorStyle
+    return this._cursorStyle;
   }
 
   set cursorStyle(value: "block" | "underline" | undefined) {
@@ -615,59 +667,58 @@ export class GhosttyTerminalRenderable extends TextBufferRenderable {
 
   protected override onRemove(): void {
     if (this._focused || !this._focusable) {
-      this.hideTerminalCursor()
+      this.hideTerminalCursor();
     }
   }
 
   private hideTerminalCursor(): void {
-    this.ctx.setCursorPosition(0, 0, false)
+    this.ctx.setCursorPosition(0, 0, false);
   }
 
   private renderTerminalCursor(): void {
     if (!this._renderCursor.visible || (this._focusable && !this._focused)) {
-      this.hideTerminalCursor()
-      return
+      this.hideTerminalCursor();
+      return;
     }
 
-    const style = this._cursorStyle ?? this._renderCursor.style
+    const style = this._cursorStyle ?? this._renderCursor.style;
     this.ctx.setCursorStyle({
       style,
       blinking: false,
-    })
+    });
     this.ctx.setCursorPosition(
       this.x + this._renderCursor.x + 1,
       this.y + this._renderCursor.y + 1,
       true,
-    )
+    );
   }
 
   override focus(): void {
-    super.focus()
-    this.requestRender()
+    super.focus();
+    this.requestRender();
   }
 
   override blur(): void {
-    super.blur()
-    this.hideTerminalCursor()
-    this.requestRender()
+    super.blur();
+    this.hideTerminalCursor();
+    this.requestRender();
   }
 
   protected renderSelf(buffer: any): void {
     if (this._ansiDirty) {
-      // Skip if persistent terminal has no new data since last render
-      if (this._persistentTerminal && !this._persistentTerminal.isDirty()) {
-        this._ansiDirty = false;
-        super.renderSelf(buffer);
-        return;
-      }
-
       let data: TerminalData;
 
       if (this._persistentTerminal) {
-        // Use binary bridge for efficient streaming (avoids JSON serialization)
-        data = this._persistentTerminal.getBinary({
-          limit: this._limit,
-        });
+        // Compute viewport offset: explicit scroll or follow latest (bottom)
+        const lim = this._limit ?? this._rows;
+        const total = this._persistentTerminal.getTotalLines();
+        const max = Math.max(0, total - lim);
+        const offset =
+          this._scrollOffset !== undefined
+            ? Math.min(this._scrollOffset, max)
+            : max;
+
+        data = this._persistentTerminal.getBinary({ offset, limit: lim });
         this._persistentTerminal.markClean();
       } else {
         // Stateless mode - create terminal each time
@@ -690,29 +741,42 @@ export class GhosttyTerminalRenderable extends TextBufferRenderable {
         }
       }
 
-      this.textBuffer.setStyledText(terminalDataToStyledText(data, this._highlights))
-      this.updateTextInfo()
+      this.textBuffer.setStyledText(
+        terminalDataToStyledText(data, this._highlights),
+      );
+      this.updateTextInfo();
       if (this._showCursor) {
-        const cursorY = Math.max(0, (data.totalLines - data.rows) + data.cursor[1] - data.offset)
-        this._renderCursor.x = data.cursor[0]
-        this._renderCursor.y = cursorY
-        this._renderCursor.visible = data.cursorVisible && cursorY < data.lines.length
+        const cursorY = Math.max(
+          0,
+          data.totalLines - data.rows + data.cursor[1] - data.offset,
+        );
+        this._renderCursor.x = data.cursor[0];
+        this._renderCursor.y = cursorY;
+        this._renderCursor.visible =
+          data.cursorVisible && cursorY < data.lines.length;
         // Map Ghostty cursor style names to opentui names
         // "bar" → "line", "default" preserved as "default" (→ \x1b[0 q, native cursor)
-        const ts = data.cursorStyle
-        this._renderCursor.style = ts === "default" ? "default" : ts === "bar" ? "line" : ts === "underline" ? "underline" : "block"
+        const ts = data.cursorStyle;
+        this._renderCursor.style =
+          ts === "default"
+            ? "default"
+            : ts === "bar"
+              ? "line"
+              : ts === "underline"
+                ? "underline"
+                : "block";
       } else {
-        this._renderCursor.visible = false
+        this._renderCursor.visible = false;
       }
 
       // Update line count based on actual rendered lines
-      const lineInfo = this.textBufferView.logicalLineInfo
-      this._lineCount = getLineStarts(lineInfo).length
+      const lineInfo = this.textBufferView.logicalLineInfo;
+      this._lineCount = getLineStarts(lineInfo).length;
 
-      this._ansiDirty = false
+      this._ansiDirty = false;
     }
-    super.renderSelf(buffer)
-    this.renderTerminalCursor()
+    super.renderSelf(buffer);
+    this.renderTerminalCursor();
   }
 
   /**
@@ -735,8 +799,8 @@ export class GhosttyTerminalRenderable extends TextBufferRenderable {
 
     // Get the line info which contains actual Y offsets for each line
     // This accounts for wrapping and actual text layout
-    const lineInfo = this.textBufferView.logicalLineInfo
-    const lineStarts = getLineStarts(lineInfo)
+    const lineInfo = this.textBufferView.logicalLineInfo;
+    const lineStarts = getLineStarts(lineInfo);
 
     // If we have line start info, use it; otherwise fall back to simple calculation
     let lineYOffset = clampedLine;
