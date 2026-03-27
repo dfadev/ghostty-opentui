@@ -433,7 +433,9 @@ export class PersistentTerminal {
     const cursorY = view.getUint16(pos, true);
     pos += 2;
     const cursorVisible = buf[pos] === 1;
-    pos += 4; // +3 pad
+    pos++;
+    const cursorStyleByte = buf[pos];
+    pos += 3; // +2 pad
     const dataOffset = view.getUint32(pos, true);
     pos += 4;
     const total = view.getUint32(pos, true);
@@ -490,7 +492,10 @@ export class PersistentTerminal {
       rows,
       cursor: [cursorX, cursorY],
       cursorVisible,
-      cursorStyle: "block" as const,
+      cursorStyle:
+        (["default", "block", "bar", "underline", "block_hollow"] as const)[
+          cursorStyleByte
+        ] ?? "default",
       offset: dataOffset,
       totalLines: total,
       lines,

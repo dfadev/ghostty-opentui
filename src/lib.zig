@@ -330,12 +330,21 @@ pub fn writeBinaryOutput(
     t: *ghostty_vt.Terminal,
     offset: usize,
     limit: ?usize,
+    cursor_style_set: bool,
     total_lines: usize,
 ) !void {
     const screen = t.screens.active;
     const palette = &t.colors.palette.current;
     const terminal_bg = t.colors.background.get();
     const cursor_visible = t.modes.get(.cursor_visible);
+
+    // Encode cursor style: 0=default, 1=block, 2=bar, 3=underline, 4=block_hollow
+    const cursor_style: u8 = if (!cursor_style_set) 0 else switch (screen.cursor.cursor_style) {
+        .block => 1,
+        .bar => 2,
+        .underline => 3,
+        .block_hollow => 4,
+    };
 
     const writer = output.writer(alloc);
 
@@ -363,7 +372,8 @@ pub fn writeBinaryOutput(
     try writer.writeInt(u16, @intCast(screen.cursor.x), .little);
     try writer.writeInt(u16, @intCast(screen.cursor.y), .little);
     try writer.writeByte(if (cursor_visible) 1 else 0);
-    try writer.writeByteNTimes(0, 3); // pad
+    try writer.writeByte(cursor_style);
+    try writer.writeByteNTimes(0, 2); // pad
     try writer.writeInt(u32, @intCast(offset), .little);
     try writer.writeInt(u32, @intCast(total_lines), .little);
     try writer.writeInt(u16, num_rows, .little);
@@ -923,7 +933,7 @@ fn getTerminalCells(js: *napigen.JsContext, id: u32, offset: u32, limit: u32) !n
     const lim: ?usize = if (limit == 0) null else @intCast(limit);
 
     var output: std.ArrayListAligned(u8, null) = .empty;
-    try writeBinaryOutput(&output, alloc, &term.terminal, @intCast(offset), lim, term.getTotalLines());
+    try writeBinaryOutput(&output, alloc, &term.terminal, @intCast(offset), lim, term.cursor_style_set, term.getTotalLines());
 
     // Return as Node.js Buffer via napi_create_buffer_copy.
     // This copies our bytes into V8-managed memory. The arena memory is freed
@@ -1329,7 +1339,7 @@ test "writeBinaryOutput header fields match writeJsonOutput" {
     // Get binary output
     var bin: std.ArrayListAligned(u8, null) = .empty;
     defer bin.deinit(alloc);
-    try writeBinaryOutput(&bin, alloc, &t, 0, null, total);
+    try writeBinaryOutput(&bin, alloc, &t, 0, null, false, total);
 
     // Parse binary header (24 bytes)
     const view = bin.items;
@@ -1369,7 +1379,7 @@ test "writeBinaryOutput span text matches" {
 
     var bin: std.ArrayListAligned(u8, null) = .empty;
     defer bin.deinit(alloc);
-    try writeBinaryOutput(&bin, alloc, &t, 0, null, total);
+    try writeBinaryOutput(&bin, alloc, &t, 0, null, false, total);
 
     const view = bin.items;
     // Skip 24-byte header, first row starts with num_spans (u16)
@@ -1411,7 +1421,7 @@ test "writeBinaryOutput preserves RGB color bytes" {
 
     var bin: std.ArrayListAligned(u8, null) = .empty;
     defer bin.deinit(alloc);
-    try writeBinaryOutput(&bin, alloc, &t, 0, null, total);
+    try writeBinaryOutput(&bin, alloc, &t, 0, null, false, total);
 
     const view = bin.items;
     // Header (24) + num_spans (2) = 26, then first span: width (2) + fg_r, fg_g, fg_b, fg_present
@@ -1441,7 +1451,7 @@ test "writeBinaryOutput with offset and limit" {
     // Request rows 1..3 (offset=1, limit=2)
     var bin: std.ArrayListAligned(u8, null) = .empty;
     defer bin.deinit(alloc);
-    try writeBinaryOutput(&bin, alloc, &t, 1, 2, total);
+    try writeBinaryOutput(&bin, alloc, &t, 1, 2, false, total);
 
     const view = bin.items;
     const offset_val = std.mem.readInt(u32, view[12..16], .little);
