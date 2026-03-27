@@ -755,11 +755,11 @@ export class GhosttyTerminalRenderable extends TextBufferRenderable {
         this._renderCursor.visible =
           data.cursorVisible && cursorY < data.lines.length;
         // Map Ghostty cursor style names to opentui names
-        // "bar" → "line", "default" preserved as "default" (→ \x1b[0 q, native cursor)
+        // "bar" → "line", "default" → "line" (bar cursor when no DECSCUSR received)
         const ts = data.cursorStyle;
         this._renderCursor.style =
           ts === "default"
-            ? "default"
+            ? "line"
             : ts === "bar"
               ? "line"
               : ts === "underline"
