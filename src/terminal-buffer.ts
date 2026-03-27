@@ -676,7 +676,11 @@ export class GhosttyTerminalRenderable extends TextBufferRenderable {
   }
 
   private renderTerminalCursor(): void {
-    if (!this._renderCursor.visible || (this._focusable && !this._focused)) {
+    if (
+      !this._showCursor ||
+      !this._renderCursor.visible ||
+      (this._focusable && !this._focused)
+    ) {
       this.hideTerminalCursor();
       return;
     }
