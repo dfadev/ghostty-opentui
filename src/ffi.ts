@@ -5,7 +5,6 @@ export type { NativeModule }
 
 const utf8Decoder = new TextDecoder("utf-8")
 
-
 export interface TerminalSpan {
   text: string
   fg: string | null
@@ -47,10 +46,7 @@ function decodeUtf8(input: Buffer | Uint8Array | string): string {
 /**
  * Windows fallback: strips ANSI codes and returns plain text lines
  */
-function ptyToJsonFallback(
-  input: Buffer | Uint8Array | string,
-  options: PtyToJsonOptions = {},
-): TerminalData {
+function ptyToJsonFallback(input: Buffer | Uint8Array | string, options: PtyToJsonOptions = {}): TerminalData {
   const { cols = 120, rows = 40, offset = 0, limit = 0 } = options
 
   const text = decodeUtf8(input)
@@ -59,8 +55,7 @@ function ptyToJsonFallback(
 
   // Apply offset and limit
   const startLine = offset
-  const endLine =
-    limit > 0 ? Math.min(startLine + limit, allLines.length) : allLines.length
+  const endLine = limit > 0 ? Math.min(startLine + limit, allLines.length) : allLines.length
   const selectedLines = allLines.slice(startLine, endLine)
 
   return {
@@ -72,23 +67,12 @@ function ptyToJsonFallback(
     offset,
     totalLines: allLines.length,
     lines: selectedLines.map((lineText) => ({
-      spans: [
-        {
-          text: lineText,
-          fg: null,
-          bg: null,
-          flags: 0,
-          width: lineText.length,
-        },
-      ],
+      spans: [{ text: lineText, fg: null, bg: null, flags: 0, width: lineText.length }],
     })),
   }
 }
 
-export function ptyToJson(
-  input: Buffer | Uint8Array | string,
-  options: PtyToJsonOptions = {},
-): TerminalData {
+export function ptyToJson(input: Buffer | Uint8Array | string, options: PtyToJsonOptions = {}): TerminalData {
   // Fallback for Windows or if native module not available
   if (!native) {
     return ptyToJsonFallback(input, options)
@@ -153,10 +137,7 @@ export interface PtyToTextOptions {
 /**
  * Windows fallback: strips ANSI codes and returns plain text
  */
-function ptyToTextFallback(
-  input: Buffer | Uint8Array | string,
-  options: PtyToTextOptions = {},
-): string {
+function ptyToTextFallback(input: Buffer | Uint8Array | string, options: PtyToTextOptions = {}): string {
   const text = decodeUtf8(input)
   return stripAnsi(text)
 }
@@ -168,10 +149,7 @@ function ptyToTextFallback(
  *
  * Useful for cleaning terminal output before sending to LLMs or other text processors.
  */
-export function ptyToText(
-  input: Buffer | Uint8Array | string,
-  options: PtyToTextOptions = {},
-): string {
+export function ptyToText(input: Buffer | Uint8Array | string, options: PtyToTextOptions = {}): string {
   // Fallback for Windows or if native module not available
   if (!native) {
     return ptyToTextFallback(input, options)
@@ -199,10 +177,7 @@ export interface PtyToHtmlOptions {
 /**
  * Windows fallback: wraps plain text in pre tags
  */
-function ptyToHtmlFallback(
-  input: Buffer | Uint8Array | string,
-  options: PtyToHtmlOptions = {},
-): string {
+function ptyToHtmlFallback(input: Buffer | Uint8Array | string, options: PtyToHtmlOptions = {}): string {
   const text = decodeUtf8(input)
   const plainText = stripAnsi(text)
   // Escape HTML entities
@@ -221,10 +196,7 @@ function ptyToHtmlFallback(
  *
  * Useful for rendering terminal output in web pages or HTML documents.
  */
-export function ptyToHtml(
-  input: Buffer | Uint8Array | string,
-  options: PtyToHtmlOptions = {},
-): string {
+export function ptyToHtml(input: Buffer | Uint8Array | string, options: PtyToHtmlOptions = {}): string {
   // Fallback for Windows or if native module not available
   if (!native) {
     return ptyToHtmlFallback(input, options)
@@ -291,9 +263,7 @@ export class PersistentTerminal {
 
   constructor(options: PersistentTerminalOptions = {}) {
     if (!native) {
-      throw new Error(
-        "Native module not available - PersistentTerminal requires native support",
-      )
+      throw new Error("Native module not available - PersistentTerminal requires native support")
     }
 
     this._id = generateTerminalId()
@@ -383,9 +353,7 @@ export class PersistentTerminal {
       cursorStyle: string
       offset: number
       totalLines: number
-      lines: Array<
-        Array<[string, string | null, string | null, number, number]>
-      >
+      lines: Array<Array<[string, string | null, string | null, number, number]>>
     }
 
     return {
@@ -407,8 +375,6 @@ export class PersistentTerminal {
       })),
     }
   }
-
-  /**
 
   /**
    * Get raw binary cell data buffer directly, no JS object allocation.
@@ -448,7 +414,7 @@ export class PersistentTerminal {
    * Check if the terminal is ready for reading.
    * Returns true if the parser is in ground state, meaning all escape
    * sequences have been fully processed.
-   *
+   * 
    * Use this after feed() to ensure you're not reading partial state.
    */
   isReady(): boolean {
