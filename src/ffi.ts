@@ -1,50 +1,50 @@
-import stripAnsi from "strip-ansi";
-import { native, type NativeModule } from "./native-lib.cjs";
+import stripAnsi from "strip-ansi"
+import { native, type NativeModule } from "./native-lib.cjs"
 
-export type { NativeModule };
+export type { NativeModule }
 
-const utf8Decoder = new TextDecoder("utf-8");
+const utf8Decoder = new TextDecoder("utf-8")
 
 function hex2(n: number): string {
-  return n < 16 ? "0" + n.toString(16) : n.toString(16);
+  return n < 16 ? "0" + n.toString(16) : n.toString(16)
 }
 
 export interface TerminalSpan {
-  text: string;
-  fg: string | null;
-  bg: string | null;
-  flags: number;
-  width: number;
+  text: string
+  fg: string | null
+  bg: string | null
+  flags: number
+  width: number
 }
 
 export interface TerminalLine {
-  spans: TerminalSpan[];
+  spans: TerminalSpan[]
 }
 
 export interface TerminalData {
-  cols: number;
-  rows: number;
-  cursor: [number, number];
-  cursorVisible: boolean;
-  cursorStyle: "default" | "block" | "bar" | "underline" | "block_hollow";
-  offset: number;
-  totalLines: number;
-  lines: TerminalLine[];
+  cols: number
+  rows: number
+  cursor: [number, number]
+  cursorVisible: boolean
+  cursorStyle: "default" | "block" | "bar" | "underline" | "block_hollow"
+  offset: number
+  totalLines: number
+  lines: TerminalLine[]
 }
 
 export interface PtyToJsonOptions {
-  cols?: number;
-  rows?: number;
-  offset?: number;
-  limit?: number;
+  cols?: number
+  rows?: number
+  offset?: number
+  limit?: number
 }
 
 function decodeUtf8(input: Buffer | Uint8Array | string): string {
   if (typeof input === "string") {
-    return input;
+    return input
   }
 
-  return utf8Decoder.decode(input);
+  return utf8Decoder.decode(input)
 }
 
 /**
@@ -54,17 +54,17 @@ function ptyToJsonFallback(
   input: Buffer | Uint8Array | string,
   options: PtyToJsonOptions = {},
 ): TerminalData {
-  const { cols = 120, rows = 40, offset = 0, limit = 0 } = options;
+  const { cols = 120, rows = 40, offset = 0, limit = 0 } = options
 
-  const text = decodeUtf8(input);
-  const plainText = stripAnsi(text);
-  const allLines = plainText.split("\n");
+  const text = decodeUtf8(input)
+  const plainText = stripAnsi(text)
+  const allLines = plainText.split("\n")
 
   // Apply offset and limit
-  const startLine = offset;
+  const startLine = offset
   const endLine =
-    limit > 0 ? Math.min(startLine + limit, allLines.length) : allLines.length;
-  const selectedLines = allLines.slice(startLine, endLine);
+    limit > 0 ? Math.min(startLine + limit, allLines.length) : allLines.length
+  const selectedLines = allLines.slice(startLine, endLine)
 
   return {
     cols,
@@ -85,7 +85,7 @@ function ptyToJsonFallback(
         },
       ],
     })),
-  };
+  }
 }
 
 export function ptyToJson(
@@ -94,12 +94,12 @@ export function ptyToJson(
 ): TerminalData {
   // Fallback for Windows or if native module not available
   if (!native) {
-    return ptyToJsonFallback(input, options);
+    return ptyToJsonFallback(input, options)
   }
 
-  const { cols = 120, rows = 40, offset = 0, limit = 0 } = options;
+  const { cols = 120, rows = 40, offset = 0, limit = 0 } = options
 
-  const inputStr = decodeUtf8(input);
+  const inputStr = decodeUtf8(input)
 
   // Handle empty input
   if (inputStr.length === 0) {
@@ -112,21 +112,21 @@ export function ptyToJson(
       offset,
       totalLines: 0,
       lines: [],
-    };
+    }
   }
 
-  const jsonStr = native.ptyToJson(inputStr, cols, rows, offset, limit);
+  const jsonStr = native.ptyToJson(inputStr, cols, rows, offset, limit)
 
   const raw = JSON.parse(jsonStr) as {
-    cols: number;
-    rows: number;
-    cursor: [number, number];
-    cursorVisible: boolean;
-    cursorStyle: string;
-    offset: number;
-    totalLines: number;
-    lines: Array<Array<[string, string | null, string | null, number, number]>>;
-  };
+    cols: number
+    rows: number
+    cursor: [number, number]
+    cursorVisible: boolean
+    cursorStyle: string
+    offset: number
+    totalLines: number
+    lines: Array<Array<[string, string | null, string | null, number, number]>>
+  }
 
   return {
     cols: raw.cols,
@@ -145,12 +145,12 @@ export function ptyToJson(
         width,
       })),
     })),
-  };
+  }
 }
 
 export interface PtyToTextOptions {
-  cols?: number;
-  rows?: number;
+  cols?: number
+  rows?: number
 }
 
 /**
@@ -160,8 +160,8 @@ function ptyToTextFallback(
   input: Buffer | Uint8Array | string,
   options: PtyToTextOptions = {},
 ): string {
-  const text = decodeUtf8(input);
-  return stripAnsi(text);
+  const text = decodeUtf8(input)
+  return stripAnsi(text)
 }
 
 /**
@@ -177,26 +177,26 @@ export function ptyToText(
 ): string {
   // Fallback for Windows or if native module not available
   if (!native) {
-    return ptyToTextFallback(input, options);
+    return ptyToTextFallback(input, options)
   }
 
   // Large rows = less scrolling = fewer pages = cheaper
   // cols affects line wrapping (high default to avoid unwanted wraps)
-  const { cols = 500, rows = 256 } = options;
+  const { cols = 500, rows = 256 } = options
 
-  const inputStr = decodeUtf8(input);
+  const inputStr = decodeUtf8(input)
 
   // Handle empty input
   if (inputStr.length === 0) {
-    return "";
+    return ""
   }
 
-  return native.ptyToText(inputStr, cols, rows);
+  return native.ptyToText(inputStr, cols, rows)
 }
 
 export interface PtyToHtmlOptions {
-  cols?: number;
-  rows?: number;
+  cols?: number
+  rows?: number
 }
 
 /**
@@ -206,15 +206,15 @@ function ptyToHtmlFallback(
   input: Buffer | Uint8Array | string,
   options: PtyToHtmlOptions = {},
 ): string {
-  const text = decodeUtf8(input);
-  const plainText = stripAnsi(text);
+  const text = decodeUtf8(input)
+  const plainText = stripAnsi(text)
   // Escape HTML entities
   const escaped = plainText
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-  return `<pre style="font-family: monospace;">${escaped}</pre>`;
+    .replace(/"/g, "&quot;")
+  return `<pre style="font-family: monospace;">${escaped}</pre>`
 }
 
 /**
@@ -230,21 +230,21 @@ export function ptyToHtml(
 ): string {
   // Fallback for Windows or if native module not available
   if (!native) {
-    return ptyToHtmlFallback(input, options);
+    return ptyToHtmlFallback(input, options)
   }
 
   // Large rows = less scrolling = fewer pages = cheaper
   // cols affects line wrapping (high default to avoid unwanted wraps)
-  const { cols = 500, rows = 256 } = options;
+  const { cols = 500, rows = 256 } = options
 
-  const inputStr = decodeUtf8(input);
+  const inputStr = decodeUtf8(input)
 
   // Handle empty input
   if (inputStr.length === 0) {
-    return "";
+    return ""
   }
 
-  return native.ptyToHtml(inputStr, cols, rows);
+  return native.ptyToHtml(inputStr, cols, rows)
 }
 
 export const StyleFlags = {
@@ -254,31 +254,31 @@ export const StyleFlags = {
   STRIKETHROUGH: 8,
   INVERSE: 16,
   FAINT: 32,
-} as const;
+} as const
 
 // =============================================================================
 // Persistent Terminal API
 // =============================================================================
 
-let nextTerminalId = 1;
+let nextTerminalId = 1
 
 /**
  * Generate a unique terminal ID
  */
 function generateTerminalId(): number {
-  return nextTerminalId++;
+  return nextTerminalId++
 }
 
 /**
  * Check if native persistent terminal API is available
  */
 export function hasPersistentTerminalSupport(): boolean {
-  return native !== null && typeof native.createTerminal === "function";
+  return native !== null && typeof native.createTerminal === "function"
 }
 
 export interface PersistentTerminalOptions {
-  cols?: number;
-  rows?: number;
+  cols?: number
+  rows?: number
 }
 
 /**
@@ -286,44 +286,44 @@ export interface PersistentTerminalOptions {
  * Much more efficient than ptyToJson for streaming use cases.
  */
 export class PersistentTerminal {
-  private readonly _id: number;
-  private _cols: number;
-  private _rows: number;
-  private _destroyed = false;
-  private _streamDecoder = new TextDecoder("utf-8");
+  private readonly _id: number
+  private _cols: number
+  private _rows: number
+  private _destroyed = false
+  private _streamDecoder = new TextDecoder("utf-8")
 
   constructor(options: PersistentTerminalOptions = {}) {
     if (!native) {
       throw new Error(
         "Native module not available - PersistentTerminal requires native support",
-      );
+      )
     }
 
-    this._id = generateTerminalId();
-    this._cols = options.cols ?? 120;
-    this._rows = options.rows ?? 40;
+    this._id = generateTerminalId()
+    this._cols = options.cols ?? 120
+    this._rows = options.rows ?? 40
 
-    native.createTerminal(this._id, this._cols, this._rows);
+    native.createTerminal(this._id, this._cols, this._rows)
   }
 
   /** The unique identifier for this terminal */
   get id(): number {
-    return this._id;
+    return this._id
   }
 
   /** Current number of columns */
   get cols(): number {
-    return this._cols;
+    return this._cols
   }
 
   /** Current number of rows */
   get rows(): number {
-    return this._rows;
+    return this._rows
   }
 
   /** Whether this terminal has been destroyed */
   get destroyed(): boolean {
-    return this._destroyed;
+    return this._destroyed
   }
 
   /**
@@ -331,22 +331,22 @@ export class PersistentTerminal {
    * The terminal maintains state (cursor position, colors, etc.) between calls.
    */
   feed(data: Buffer | Uint8Array | string): void {
-    this.assertNotDestroyed();
+    this.assertNotDestroyed()
 
     if (typeof data === "string") {
       // Discard any partial UTF-8 bytes from prior binary feeds before
       // crossing into a plain string boundary.
-      this._streamDecoder = new TextDecoder("utf-8");
+      this._streamDecoder = new TextDecoder("utf-8")
 
       if (data.length > 0) {
-        native!.feedTerminal(this._id, data);
+        native!.feedTerminal(this._id, data)
       }
-      return;
+      return
     }
 
-    const decoded = this._streamDecoder.decode(data, { stream: true });
+    const decoded = this._streamDecoder.decode(data, { stream: true })
     if (decoded.length > 0) {
-      native!.feedTerminal(this._id, decoded);
+      native!.feedTerminal(this._id, decoded)
     }
   }
 
@@ -354,10 +354,10 @@ export class PersistentTerminal {
    * Resize the terminal. Existing content will be reflowed if possible.
    */
   resize(cols: number, rows: number): void {
-    this.assertNotDestroyed();
-    this._cols = cols;
-    this._rows = rows;
-    native!.resizeTerminal(this._id, cols, rows);
+    this.assertNotDestroyed()
+    this._cols = cols
+    this._rows = rows
+    native!.resizeTerminal(this._id, cols, rows)
   }
 
   /**
@@ -365,31 +365,31 @@ export class PersistentTerminal {
    * Clears all content and resets cursor to origin.
    */
   reset(): void {
-    this.assertNotDestroyed();
-    native!.resetTerminal(this._id);
-    this._streamDecoder = new TextDecoder("utf-8");
+    this.assertNotDestroyed()
+    native!.resetTerminal(this._id)
+    this._streamDecoder = new TextDecoder("utf-8")
   }
 
   /**
    * Get the current terminal content as TerminalData.
    */
   getJson(options: { offset?: number; limit?: number } = {}): TerminalData {
-    this.assertNotDestroyed();
-    const { offset = 0, limit = 0 } = options;
+    this.assertNotDestroyed()
+    const { offset = 0, limit = 0 } = options
 
-    const jsonStr = native!.getTerminalJson(this._id, offset, limit);
+    const jsonStr = native!.getTerminalJson(this._id, offset, limit)
     const raw = JSON.parse(jsonStr) as {
-      cols: number;
-      rows: number;
-      cursor: [number, number];
-      cursorVisible: boolean;
-      cursorStyle: string;
-      offset: number;
-      totalLines: number;
+      cols: number
+      rows: number
+      cursor: [number, number]
+      cursorVisible: boolean
+      cursorStyle: string
+      offset: number
+      totalLines: number
       lines: Array<
         Array<[string, string | null, string | null, number, number]>
-      >;
-    };
+      >
+    }
 
     return {
       cols: raw.cols,
@@ -408,7 +408,7 @@ export class PersistentTerminal {
           width,
         })),
       })),
-    };
+    }
   }
 
   /**
@@ -416,65 +416,65 @@ export class PersistentTerminal {
    * Much faster than getJson() — avoids JSON serialization/parsing overhead.
    */
   getBinary(options: { offset?: number; limit?: number } = {}): TerminalData {
-    this.assertNotDestroyed();
-    const { offset = 0, limit = 0 } = options;
+    this.assertNotDestroyed()
+    const { offset = 0, limit = 0 } = options
 
-    const buf: Buffer = native!.getTerminalCells(this._id, offset, limit);
-    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const buf: Buffer = native!.getTerminalCells(this._id, offset, limit)
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
 
     // Read 24-byte header
-    let pos = 0;
-    const cols = view.getUint16(pos, true);
-    pos += 2;
-    const rows = view.getUint16(pos, true);
-    pos += 2;
-    const cursorX = view.getUint16(pos, true);
-    pos += 2;
-    const cursorY = view.getUint16(pos, true);
-    pos += 2;
-    const cursorVisible = buf[pos] === 1;
-    pos++;
-    const cursorStyleByte = buf[pos];
-    pos += 3; // +2 pad
-    const dataOffset = view.getUint32(pos, true);
-    pos += 4;
-    const total = view.getUint32(pos, true);
-    pos += 4;
-    const numRows = view.getUint16(pos, true);
-    pos += 4; // +2 pad
+    let pos = 0
+    const cols = view.getUint16(pos, true)
+    pos += 2
+    const rows = view.getUint16(pos, true)
+    pos += 2
+    const cursorX = view.getUint16(pos, true)
+    pos += 2
+    const cursorY = view.getUint16(pos, true)
+    pos += 2
+    const cursorVisible = buf[pos] === 1
+    pos++
+    const cursorStyleByte = buf[pos]
+    pos += 3 // +2 pad
+    const dataOffset = view.getUint32(pos, true)
+    pos += 4
+    const total = view.getUint32(pos, true)
+    pos += 4
+    const numRows = view.getUint16(pos, true)
+    pos += 4 // +2 pad
 
-    const lines: TerminalLine[] = [];
-    const decoder = new TextDecoder();
+    const lines: TerminalLine[] = []
+    const decoder = new TextDecoder()
     for (let r = 0; r < numRows; r++) {
-      const numSpans = view.getUint16(pos, true);
-      pos += 2;
-      const spans: TerminalSpan[] = [];
+      const numSpans = view.getUint16(pos, true)
+      pos += 2
+      const spans: TerminalSpan[] = []
       for (let s = 0; s < numSpans; s++) {
-        const width = view.getUint16(pos, true);
-        pos += 2;
-        const fgR = buf[pos];
-        pos++;
-        const fgG = buf[pos];
-        pos++;
-        const fgB = buf[pos];
-        pos++;
-        const fgP = buf[pos];
-        pos++;
-        const bgR = buf[pos];
-        pos++;
-        const bgG = buf[pos];
-        pos++;
-        const bgB = buf[pos];
-        pos++;
-        const bgP = buf[pos];
-        pos++;
-        const flags = buf[pos];
-        pos++;
-        pos++; // pad
-        const textLen = view.getUint16(pos, true);
-        pos += 2;
-        const text = decoder.decode(buf.subarray(pos, pos + textLen));
-        pos += textLen;
+        const width = view.getUint16(pos, true)
+        pos += 2
+        const fgR = buf[pos]
+        pos++
+        const fgG = buf[pos]
+        pos++
+        const fgB = buf[pos]
+        pos++
+        const fgP = buf[pos]
+        pos++
+        const bgR = buf[pos]
+        pos++
+        const bgG = buf[pos]
+        pos++
+        const bgB = buf[pos]
+        pos++
+        const bgP = buf[pos]
+        pos++
+        const flags = buf[pos]
+        pos++
+        pos++ // pad
+        const textLen = view.getUint16(pos, true)
+        pos += 2
+        const text = decoder.decode(buf.subarray(pos, pos + textLen))
+        pos += textLen
 
         spans.push({
           text,
@@ -482,9 +482,9 @@ export class PersistentTerminal {
           bg: bgP ? `#${hex2(bgR)}${hex2(bgG)}${hex2(bgB)}` : null,
           flags,
           width,
-        });
+        })
       }
-      lines.push({ spans });
+      lines.push({ spans })
     }
 
     return {
@@ -499,32 +499,32 @@ export class PersistentTerminal {
       offset: dataOffset,
       totalLines: total,
       lines,
-    };
+    }
   }
 
   /**
    * Get the current terminal content as plain text.
    */
   getText(): string {
-    this.assertNotDestroyed();
-    return native!.getTerminalText(this._id);
+    this.assertNotDestroyed()
+    return native!.getTerminalText(this._id)
   }
 
   /**
    * Get the current cursor position as [x, y].
    */
   getCursor(): [number, number] {
-    this.assertNotDestroyed();
-    const json = native!.getTerminalCursor(this._id);
-    return JSON.parse(json) as [number, number];
+    this.assertNotDestroyed()
+    const json = native!.getTerminalCursor(this._id)
+    return JSON.parse(json) as [number, number]
   }
 
   /**
    * Get the total number of lines in the terminal buffer.
    */
   getTotalLines(): number {
-    this.assertNotDestroyed();
-    return native!.getTerminalTotalLines(this._id);
+    this.assertNotDestroyed()
+    return native!.getTerminalTotalLines(this._id)
   }
 
   /**
@@ -535,8 +535,8 @@ export class PersistentTerminal {
    * Use this after feed() to ensure you're not reading partial state.
    */
   isReady(): boolean {
-    this.assertNotDestroyed();
-    return native!.isTerminalReady(this._id);
+    this.assertNotDestroyed()
+    return native!.isTerminalReady(this._id)
   }
 
   /**
@@ -544,8 +544,8 @@ export class PersistentTerminal {
    * Use to skip expensive re-renders when nothing changed.
    */
   isDirty(): boolean {
-    this.assertNotDestroyed();
-    return native!.isTerminalDirty(this._id);
+    this.assertNotDestroyed()
+    return native!.isTerminalDirty(this._id)
   }
 
   /**
@@ -553,8 +553,8 @@ export class PersistentTerminal {
    * Call after reading data via getJson()/getBinary().
    */
   markClean(): void {
-    this.assertNotDestroyed();
-    native!.markTerminalClean(this._id);
+    this.assertNotDestroyed()
+    native!.markTerminalClean(this._id)
   }
 
   /**
@@ -562,15 +562,15 @@ export class PersistentTerminal {
    * The terminal cannot be used after this call.
    */
   destroy(): void {
-    if (this._destroyed) return;
-    this._destroyed = true;
-    this._streamDecoder = new TextDecoder("utf-8");
-    native!.destroyTerminal(this._id);
+    if (this._destroyed) return
+    this._destroyed = true
+    this._streamDecoder = new TextDecoder("utf-8")
+    native!.destroyTerminal(this._id)
   }
 
   private assertNotDestroyed(): void {
     if (this._destroyed) {
-      throw new Error("Terminal has been destroyed");
+      throw new Error("Terminal has been destroyed")
     }
   }
 }
