@@ -1014,23 +1014,40 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
     const fb = this.frameBuffer;
     fb.clear(DEFAULT_BG);
 
-    // Get binary data. When scrollOffset is undefined, show latest (bottom of scrollback).
+    // Get raw binary buffer — no intermediate JS objects
     const lim = this._limit ?? this._rows;
     const total = this._terminal.getTotalLines();
     const maxOffset = Math.max(0, total - lim);
     const offset = this._scrollOffset ?? maxOffset;
 
-    const data = this._terminal.getBinary({
+    const buf = this._terminal.getRawCells({
       offset: Math.min(offset, maxOffset),
       limit: lim,
     });
     this._terminal.markClean();
 
-    this._lineCount = data.totalLines;
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const decoder = new TextDecoder();
+
+    // Read 24-byte header
+    let pos = 0;
+    const hdrRows = view.getUint16(2, true);
+    const cursorX = view.getUint16(4, true);
+    const cursorRawY = view.getUint16(6, true);
+    const cursorVisible = buf[8] === 1;
+    const cursorStyleByte = buf[9];
+    const dataOffset = view.getUint32(12, true);
+    const totalLines = view.getUint32(16, true);
+    const numRows = view.getUint16(20, true);
+    pos = 24;
+
+    this._lineCount = totalLines;
 
     // Build highlight lookup
-    const hlByLine = new Map<number, HighlightRegion[]>();
-    if (this._highlights) {
+    const hlByLine = this._highlights
+      ? new Map<number, HighlightRegion[]>()
+      : null;
+    if (this._highlights && hlByLine) {
       for (const hl of this._highlights) {
         const arr = hlByLine.get(hl.line) ?? [];
         arr.push(hl);
@@ -1038,44 +1055,58 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
       }
     }
 
-    // Compute cursor row in data.lines coordinates
+    // Compute cursor row in viewport coordinates
     const cursorDataY = this._showCursor
-      ? Math.max(0, data.totalLines - data.rows + data.cursor[1] - data.offset)
+      ? Math.max(0, totalLines - hdrRows + cursorRawY - dataOffset)
       : -1;
 
-    // Render each row
-    for (let row = 0; row < data.lines.length; row++) {
-      const line = data.lines[row];
+    // Render each row directly from binary
+    for (let row = 0; row < numRows; row++) {
+      const numSpans = view.getUint16(pos, true);
+      pos += 2;
       let col = 0;
+      const lineHl = hlByLine?.get(row);
 
-      for (const span of line.spans) {
-        const fg = span.fg ? cachedColor(span.fg) : DEFAULT_FG;
-        let bg = span.bg ? cachedColor(span.bg) : TRANSPARENT;
+      for (let s = 0; s < numSpans; s++) {
+        const width = view.getUint16(pos, true);
+        pos += 2;
+        const fgR = buf[pos++];
+        const fgG = buf[pos++];
+        const fgB = buf[pos++];
+        const fgP = buf[pos++];
+        const bgR = buf[pos++];
+        const bgG = buf[pos++];
+        const bgB = buf[pos++];
+        const bgP = buf[pos++];
+        const flags = buf[pos++];
+        pos++; // pad
+        const textLen = view.getUint16(pos, true);
+        pos += 2;
+        const text = decoder.decode(buf.subarray(pos, pos + textLen));
+        pos += textLen;
+
+        // Colors directly from bytes — no hex strings
+        const fg = fgP ? rgbaFromRGB(fgR, fgG, fgB) : DEFAULT_FG;
+        const bg = bgP ? rgbaFromRGB(bgR, bgG, bgB) : TRANSPARENT;
 
         let fgDraw = fg;
         let bgDraw = bg;
 
-        // Handle inverse
-        if (span.flags & StyleFlags.INVERSE) {
+        if (flags & StyleFlags.INVERSE) {
           fgDraw = bg.a > 0 ? bg : DEFAULT_BG;
           bgDraw = fg;
         }
 
-        // Map style flags to TextAttributes
         let attrs = 0;
-        if (span.flags & StyleFlags.BOLD) attrs |= TextAttributes.BOLD;
-        if (span.flags & StyleFlags.ITALIC) attrs |= TextAttributes.ITALIC;
-        if (span.flags & StyleFlags.UNDERLINE)
-          attrs |= TextAttributes.UNDERLINE;
-        if (span.flags & StyleFlags.STRIKETHROUGH)
+        if (flags & StyleFlags.BOLD) attrs |= TextAttributes.BOLD;
+        if (flags & StyleFlags.ITALIC) attrs |= TextAttributes.ITALIC;
+        if (flags & StyleFlags.UNDERLINE) attrs |= TextAttributes.UNDERLINE;
+        if (flags & StyleFlags.STRIKETHROUGH)
           attrs |= TextAttributes.STRIKETHROUGH;
-        if (span.flags & StyleFlags.FAINT) attrs |= TextAttributes.DIM;
+        if (flags & StyleFlags.FAINT) attrs |= TextAttributes.DIM;
 
-        // Check for highlights on this line
-        const lineHl = hlByLine.get(row);
         if (lineHl) {
-          // Draw character by character to support partial highlighting
-          for (let i = 0; i < span.text.length; i++) {
+          for (let i = 0; i < text.length; i++) {
             const c = col + i;
             let hlBg = bgDraw;
             for (const hl of lineHl) {
@@ -1084,12 +1115,11 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
                 break;
               }
             }
-            fb.setCell(c, row, span.text[i], fgDraw, hlBg, attrs);
+            fb.setCell(c, row, text[i], fgDraw, hlBg, attrs);
           }
         } else {
-          // Fast path: draw entire span at once
           fb.drawText(
-            span.text,
+            text,
             col,
             row,
             fgDraw,
@@ -1098,29 +1128,28 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
           );
         }
 
-        col += span.width;
+        col += width;
       }
     }
 
-    // Native cursor positioning (same as GhosttyTerminalRenderable)
+    // Native cursor
     if (
       this._showCursor &&
-      data.cursorVisible &&
+      cursorVisible &&
       cursorDataY >= 0 &&
-      cursorDataY < data.lines.length
+      cursorDataY < numRows
     ) {
-      const ts = data.cursorStyle;
       const style =
-        ts === "default"
+        cursorStyleByte === 2
           ? "line"
-          : ts === "bar"
-            ? "line"
-            : ts === "underline"
-              ? "underline"
-              : "block";
+          : cursorStyleByte === 3
+            ? "underline"
+            : cursorStyleByte === 1
+              ? "block"
+              : "line";
       this.ctx.setCursorStyle({ style, blinking: false });
       this.ctx.setCursorPosition(
-        this.x + data.cursor[0] + 1,
+        this.x + cursorX + 1,
         this.y + cursorDataY + 1,
         true,
       );

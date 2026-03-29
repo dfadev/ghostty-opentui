@@ -503,6 +503,15 @@ export class PersistentTerminal {
   }
 
   /**
+   * Get raw binary cell data buffer directly, no JS object allocation.
+   */
+  getRawCells(options: { offset?: number; limit?: number } = {}): Buffer {
+    this.assertNotDestroyed()
+    const { offset = 0, limit = 0 } = options
+    return native!.getTerminalCells(this._id, offset, limit)
+  }
+
+  /**
    * Get the current terminal content as plain text.
    */
   getText(): string {
