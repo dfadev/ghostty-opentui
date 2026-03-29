@@ -5,9 +5,6 @@ export type { NativeModule }
 
 const utf8Decoder = new TextDecoder("utf-8")
 
-function hex2(n: number): string {
-  return n < 16 ? "0" + n.toString(16) : n.toString(16)
-}
 
 export interface TerminalSpan {
   text: string
@@ -412,95 +409,6 @@ export class PersistentTerminal {
   }
 
   /**
-   * Get the current terminal content as TerminalData via binary protocol.
-   * Much faster than getJson() — avoids JSON serialization/parsing overhead.
-   */
-  getBinary(options: { offset?: number; limit?: number } = {}): TerminalData {
-    this.assertNotDestroyed()
-    const { offset = 0, limit = 0 } = options
-
-    const buf: Buffer = native!.getTerminalCells(this._id, offset, limit)
-    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
-
-    // Read 24-byte header
-    let pos = 0
-    const cols = view.getUint16(pos, true)
-    pos += 2
-    const rows = view.getUint16(pos, true)
-    pos += 2
-    const cursorX = view.getUint16(pos, true)
-    pos += 2
-    const cursorY = view.getUint16(pos, true)
-    pos += 2
-    const cursorVisible = buf[pos] === 1
-    pos++
-    const cursorStyleByte = buf[pos]
-    pos += 3 // +2 pad
-    const dataOffset = view.getUint32(pos, true)
-    pos += 4
-    const total = view.getUint32(pos, true)
-    pos += 4
-    const numRows = view.getUint16(pos, true)
-    pos += 4 // +2 pad
-
-    const lines: TerminalLine[] = []
-    const decoder = new TextDecoder()
-    for (let r = 0; r < numRows; r++) {
-      const numSpans = view.getUint16(pos, true)
-      pos += 2
-      const spans: TerminalSpan[] = []
-      for (let s = 0; s < numSpans; s++) {
-        const width = view.getUint16(pos, true)
-        pos += 2
-        const fgR = buf[pos]
-        pos++
-        const fgG = buf[pos]
-        pos++
-        const fgB = buf[pos]
-        pos++
-        const fgP = buf[pos]
-        pos++
-        const bgR = buf[pos]
-        pos++
-        const bgG = buf[pos]
-        pos++
-        const bgB = buf[pos]
-        pos++
-        const bgP = buf[pos]
-        pos++
-        const flags = buf[pos]
-        pos++
-        pos++ // pad
-        const textLen = view.getUint16(pos, true)
-        pos += 2
-        const text = decoder.decode(buf.subarray(pos, pos + textLen))
-        pos += textLen
-
-        spans.push({
-          text,
-          fg: fgP ? `#${hex2(fgR)}${hex2(fgG)}${hex2(fgB)}` : null,
-          bg: bgP ? `#${hex2(bgR)}${hex2(bgG)}${hex2(bgB)}` : null,
-          flags,
-          width,
-        })
-      }
-      lines.push({ spans })
-    }
-
-    return {
-      cols,
-      rows,
-      cursor: [cursorX, cursorY],
-      cursorVisible,
-      cursorStyle:
-        (["default", "block", "bar", "underline", "block_hollow"] as const)[
-          cursorStyleByte
-        ] ?? "default",
-      offset: dataOffset,
-      totalLines: total,
-      lines,
-    }
-  }
 
   /**
    * Get raw binary cell data buffer directly, no JS object allocation.
@@ -559,7 +467,7 @@ export class PersistentTerminal {
 
   /**
    * Mark the terminal as clean (content has been read).
-   * Call after reading data via getJson()/getBinary().
+   * Call after reading data via getJson()/getRawCells().
    */
   markClean(): void {
     this.assertNotDestroyed()
