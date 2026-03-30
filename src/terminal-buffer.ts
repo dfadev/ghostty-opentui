@@ -86,6 +86,12 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
   private _limit?: number
   private _lineCount = 0
   private _scrollOffset?: number
+  private _lastCursorX = 0
+  private _lastCursorDataY = -1
+  private _lastCursorVisible = false
+  private _lastCursorStyleByte = 0
+  private _lastRenderX = -1
+  private _lastRenderY = -1
 
   constructor(ctx: RenderContext, options: GhosttyFrameBufferOptions) {
     const cols = options.cols ?? 120
@@ -222,8 +228,26 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
     return this._terminal
   }
 
+  private _setCursor(): void {
+    if (this._showCursor && this._lastCursorVisible && this._lastCursorDataY >= 0 && this._lastCursorDataY < this._rows) {
+      const style = this._lastCursorStyleByte === 2 ? "line"
+        : this._lastCursorStyleByte === 3 ? "underline"
+        : this._lastCursorStyleByte === 1 ? "block"
+        : "line"
+      this.ctx.setCursorStyle({ style, blinking: false })
+      this.ctx.setCursorPosition(this.x + this._lastCursorX + 1, this.y + this._lastCursorDataY + 1, true)
+    } else {
+      this.ctx.setCursorPosition(0, 0, false)
+    }
+  }
+
   protected renderSelf(buffer: OptimizedBuffer): void {
     if (!this._contentDirty) {
+      if (this.x !== this._lastRenderX || this.y !== this._lastRenderY) {
+        this._lastRenderX = this.x
+        this._lastRenderY = this.y
+        this._setCursor()
+      }
       super.renderSelf(buffer)
       return
     }
@@ -333,16 +357,12 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
       }
     }
 
-    if (this._showCursor && cursorVisible && cursorDataY >= 0 && cursorDataY < numRows) {
-      const style = cursorStyleByte === 2 ? "line"
-        : cursorStyleByte === 3 ? "underline"
-        : cursorStyleByte === 1 ? "block"
-        : "line"
-      this.ctx.setCursorStyle({ style, blinking: false })
-      this.ctx.setCursorPosition(this.x + cursorX + 1, this.y + cursorDataY + 1, true)
-    } else {
-      this.ctx.setCursorPosition(0, 0, false)
-    }
+    this._lastCursorX = cursorX
+    this._lastCursorDataY = cursorDataY
+    this._lastCursorVisible = cursorVisible
+    this._lastCursorStyleByte = cursorStyleByte
+
+    this._setCursor()
 
     this._contentDirty = false
     super.renderSelf(buffer)
