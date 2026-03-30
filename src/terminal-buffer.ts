@@ -256,15 +256,10 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
     fb.clear(DEFAULT_BG)
 
     const lim = this._limit ?? this._rows
-    const total = this._terminal.getTotalLines()
-    const maxOffset = Math.max(0, total - lim)
-    const offset = this._scrollOffset ?? maxOffset
-
-    const buf = this._terminal.getRawCells({
-      offset: Math.min(offset, maxOffset),
-      limit: lim,
-    })
-    this._terminal.markClean()
+    const buf = this._terminal.getRawCellsBatched(
+      this._scrollOffset ?? -1,
+      lim,
+    )
 
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
     const decoder = new TextDecoder()

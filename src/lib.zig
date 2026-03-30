@@ -542,16 +542,12 @@ const PersistentTerminal = struct {
     }
 
     pub fn feed(self: *PersistentTerminal, data: []const u8) !void {
-        var timer = std.time.Timer.start() catch unreachable;
-
         const style_before = self.terminal.screens.active.cursor.cursor_style;
 
         // Use the persistent stream to maintain parser state across calls.
         // This ensures that escape sequences split across multiple chunks
         // are parsed correctly.
-        const t_before_parse = timer.read();
         try self.stream.?.nextSlice(data);
-        const t_after_parse = timer.read();
 
         // Detect if the inner application sent a DECSCUSR to change cursor style.
         if (!self.cursor_style_set) {
@@ -560,19 +556,6 @@ const PersistentTerminal = struct {
             }
         }
         self.generation +%= 1;
-        const t_end = timer.read();
-
-        const parse_ms = @as(f64, @floatFromInt(t_after_parse - t_before_parse)) / 1_000_000.0;
-        const total_ms = @as(f64, @floatFromInt(t_end)) / 1_000_000.0;
-
-        if (total_ms > 1.0) {
-            var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "[zig feed] {d}b total={d:.1}ms parse={d:.1}ms\n", .{ data.len, total_ms, parse_ms }) catch return;
-            const file = std.fs.cwd().openFile("/tmp/zig-perf.log", .{ .mode = .write_only }) catch return;
-            defer file.close();
-            file.seekFromEnd(0) catch return;
-            _ = file.write(msg) catch {};
-        }
     }
 
     /// Return total line count — O(1) via Ghostty's maintained total_rows.
@@ -675,39 +658,17 @@ fn destroyTerminal(id: u32) void {
 
 /// Feed data to a persistent terminal (string path — napigen converts JS string to []const u8)
 fn feedTerminal(id: u32, data: []const u8) !void {
-    var timer = std.time.Timer.start() catch unreachable;
-
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const t_after_lock = timer.read();
-
     const term = try getTerminal(id);
-    const t_after_lookup = timer.read();
-
     try term.feed(data);
-    const t_end = timer.read();
-
-    const total_ms = @as(f64, @floatFromInt(t_end)) / 1_000_000.0;
-    if (total_ms > 1.0) {
-        const lock_ms = @as(f64, @floatFromInt(t_after_lock)) / 1_000_000.0;
-        const lookup_ms = @as(f64, @floatFromInt(t_after_lookup - t_after_lock)) / 1_000_000.0;
-        const feed_ms = @as(f64, @floatFromInt(t_end - t_after_lookup)) / 1_000_000.0;
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[feedTerminal] {d}b total={d:.1}ms lock={d:.1}ms lookup={d:.1}ms feed={d:.1}ms\n", .{ data.len, total_ms, lock_ms, lookup_ms, feed_ms }) catch return;
-        const file = std.fs.cwd().openFile("/tmp/zig-perf.log", .{ .mode = .write_only }) catch return;
-        defer file.close();
-        file.seekFromEnd(0) catch return;
-        _ = file.write(msg) catch {};
-    }
 }
 
 /// Feed raw binary data (Buffer or Uint8Array) to a persistent terminal.
 /// Uses napigen escape hatch to read the buffer's backing memory directly,
 /// avoiding the JS string → UTF-8 round-trip that feedTerminal requires.
 fn feedTerminalBuffer(js: *napigen.JsContext, id: u32, buffer_val: napigen.napi_value) !void {
-    var timer = std.time.Timer.start() catch unreachable;
-
     var data_ptr: ?*anyopaque = null;
     var data_len: usize = 0;
 
@@ -733,26 +694,12 @@ fn feedTerminalBuffer(js: *napigen.JsContext, id: u32, buffer_val: napigen.napi_
     if (data_ptr == null or data_len == 0) return;
 
     const data: []const u8 = @as([*]const u8, @ptrCast(data_ptr.?))[0..data_len];
-    const t_after_extract = timer.read();
 
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
     const term = try getTerminal(id);
     try term.feed(data);
-    const t_end = timer.read();
-
-    const total_ms = @as(f64, @floatFromInt(t_end)) / 1_000_000.0;
-    if (total_ms > 1.0) {
-        const extract_ms = @as(f64, @floatFromInt(t_after_extract)) / 1_000_000.0;
-        const feed_ms = @as(f64, @floatFromInt(t_end - t_after_extract)) / 1_000_000.0;
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "[feedTerminalBuffer] {d}b total={d:.1}ms extract={d:.1}ms feed={d:.1}ms\n", .{ data.len, total_ms, extract_ms, feed_ms }) catch return;
-        const file = std.fs.cwd().openFile("/tmp/zig-perf.log", .{ .mode = .write_only }) catch return;
-        defer file.close();
-        file.seekFromEnd(0) catch return;
-        _ = file.write(msg) catch {};
-    }
 }
 
 /// Resize a persistent terminal
