@@ -598,16 +598,16 @@ const PersistentTerminal = struct {
     }
 };
 
-/// Global storage for persistent terminals
-/// Uses a mutex for thread-safety since NAPI can call from different threads
+/// Global storage for persistent terminals.
+/// Fixed-size slot array indexed by terminal ID (IDs are sequential from 1).
+/// Replaces HashMap for O(1) direct indexing with no hashing overhead.
 var terminals_mutex: std.Thread.Mutex = .{};
-var terminals: ?std.AutoHashMap(u32, *PersistentTerminal) = null;
+const MAX_TERMINALS = 64;
+var terminal_slots: [MAX_TERMINALS]?*PersistentTerminal = .{null} ** MAX_TERMINALS;
 
-fn getTerminalsMap() *std.AutoHashMap(u32, *PersistentTerminal) {
-    if (terminals == null) {
-        terminals = std.AutoHashMap(u32, *PersistentTerminal).init(std.heap.page_allocator);
-    }
-    return &terminals.?;
+fn getTerminal(id: u32) !*PersistentTerminal {
+    if (id == 0 or id >= MAX_TERMINALS) return error.InvalidTerminalId;
+    return terminal_slots[id] orelse return error.TerminalNotFound;
 }
 
 /// Create a new persistent terminal with the given ID
@@ -615,13 +615,13 @@ fn createTerminal(id: u32, cols: u32, rows: u32) !void {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
+    if (id == 0 or id >= MAX_TERMINALS) return error.InvalidTerminalId;
 
     // If terminal with this ID already exists, destroy it first
-    if (map.get(id)) |existing| {
+    if (terminal_slots[id]) |existing| {
         existing.deinit();
         std.heap.page_allocator.destroy(existing);
-        _ = map.remove(id);
+        terminal_slots[id] = null;
     }
 
     // Create new terminal
@@ -638,7 +638,7 @@ fn createTerminal(id: u32, cols: u32, rows: u32) !void {
     // This is critical because the stream holds a pointer to the terminal.
     term_ptr.initStream();
 
-    try map.put(id, term_ptr);
+    terminal_slots[id] = term_ptr;
 }
 
 /// Destroy a persistent terminal
@@ -646,11 +646,11 @@ fn destroyTerminal(id: u32) void {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    if (map.get(id)) |term| {
+    if (id == 0 or id >= MAX_TERMINALS) return;
+    if (terminal_slots[id]) |term| {
         term.deinit();
         std.heap.page_allocator.destroy(term);
-        _ = map.remove(id);
+        terminal_slots[id] = null;
     }
 }
 
@@ -663,8 +663,7 @@ fn feedTerminal(id: u32, data: []const u8) !void {
 
     const t_after_lock = timer.read();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
     const t_after_lookup = timer.read();
 
     try term.feed(data);
@@ -720,8 +719,7 @@ fn feedTerminalBuffer(js: *napigen.JsContext, id: u32, buffer_val: napigen.napi_
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
     try term.feed(data);
     const t_end = timer.read();
 
@@ -743,8 +741,7 @@ fn resizeTerminal(id: u32, cols: u32, rows: u32) !void {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
     try term.resize(@intCast(cols), @intCast(rows));
 }
 
@@ -753,8 +750,7 @@ fn resetTerminal(id: u32) !void {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
     term.reset();
 }
 
@@ -763,8 +759,7 @@ fn getTerminalJson(id: u32, offset: u32, limit: u32) ![]const u8 {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     const alloc = getArenaAllocator();
     // Note: arena is reset at the START of the next call, not here.
@@ -783,8 +778,7 @@ fn getTerminalText(id: u32) ![]const u8 {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     const alloc = getArenaAllocator();
     // Note: arena is reset at the START of the next call, not here.
@@ -801,8 +795,7 @@ fn getTerminalCursor(id: u32) ![]const u8 {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     const screen = term.terminal.screens.active;
 
@@ -818,8 +811,7 @@ fn getTerminalCursorPacked(id: u32) !u32 {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     const screen = term.terminal.screens.active;
     const x: u16 = @intCast(screen.cursor.x);
@@ -831,8 +823,7 @@ fn getTerminalTotalLines(id: u32) !u32 {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     return @intCast(term.getTotalLines());
 }
@@ -841,8 +832,7 @@ fn isTerminalReady(id: u32) !bool {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     return term.isReady();
 }
@@ -852,8 +842,7 @@ fn isTerminalDirty(id: u32) !bool {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     return term.isDirty();
 }
@@ -863,8 +852,7 @@ fn markTerminalClean(id: u32) !void {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     term.markClean();
 }
@@ -1000,8 +988,7 @@ fn getTerminalCells(js: *napigen.JsContext, id: u32, offset: u32, limit: u32) !n
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     const alloc = getArenaAllocator();
     const lim: ?usize = if (limit == 0) null else @intCast(limit);
@@ -1031,8 +1018,7 @@ fn getTerminalCellsBatched(js: *napigen.JsContext, id: u32, scroll_offset: i32, 
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
 
-    const map = getTerminalsMap();
-    const term = map.get(id) orelse return error.TerminalNotFound;
+    const term = try getTerminal(id);
 
     // Use page_allocator (not arena) so the buffer outlives this call.
     // V8 will own the memory via napi_create_external_buffer and free it on GC.
