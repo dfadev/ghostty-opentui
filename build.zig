@@ -5,7 +5,7 @@ const LIB_NAME = "ghostty-opentui";
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    const optimize: std.builtin.OptimizeMode = b.option(std.builtin.OptimizeMode, "optimize", "Build optimization mode") orelse .ReleaseFast;
 
     // Library module (with napigen for NAPI)
     const lib_mod = b.createModule(.{

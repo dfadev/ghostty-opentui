@@ -14,6 +14,7 @@ export interface NativeModule {
   createTerminal(id: number, cols: number, rows: number): void
   destroyTerminal(id: number): void
   feedTerminal(id: number, data: string): void
+  feedTerminalBuffer(id: number, data: Buffer | Uint8Array): void
   resizeTerminal(id: number, cols: number, rows: number): void
   resetTerminal(id: number): void
   getTerminalJson(id: number, offset: number, limit: number): string

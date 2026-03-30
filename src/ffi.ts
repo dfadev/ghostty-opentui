@@ -259,7 +259,7 @@ export class PersistentTerminal {
   private _cols: number
   private _rows: number
   private _destroyed = false
-  private _streamDecoder = new TextDecoder("utf-8")
+
 
   constructor(options: PersistentTerminalOptions = {}) {
     if (!native) {
@@ -301,19 +301,16 @@ export class PersistentTerminal {
     this.assertNotDestroyed()
 
     if (typeof data === "string") {
-      // Discard any partial UTF-8 bytes from prior binary feeds before
-      // crossing into a plain string boundary.
-      this._streamDecoder = new TextDecoder("utf-8")
-
       if (data.length > 0) {
         native!.feedTerminal(this._id, data)
       }
       return
     }
 
-    const decoded = this._streamDecoder.decode(data, { stream: true })
-    if (decoded.length > 0) {
-      native!.feedTerminal(this._id, decoded)
+    // Pass binary data directly to the native side — no JS string
+    // round-trip. The Zig VT parser handles raw bytes natively.
+    if (data.byteLength > 0) {
+      native!.feedTerminalBuffer(this._id, data)
     }
   }
 
@@ -334,7 +331,6 @@ export class PersistentTerminal {
   reset(): void {
     this.assertNotDestroyed()
     native!.resetTerminal(this._id)
-    this._streamDecoder = new TextDecoder("utf-8")
   }
 
   /**
@@ -447,7 +443,6 @@ export class PersistentTerminal {
   destroy(): void {
     if (this._destroyed) return
     this._destroyed = true
-    this._streamDecoder = new TextDecoder("utf-8")
     native!.destroyTerminal(this._id)
   }
 
