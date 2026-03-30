@@ -639,13 +639,13 @@ fn createTerminal(id: u32, cols: u32, rows: u32) !void {
     // If terminal with this ID already exists, destroy it first
     if (terminal_slots[id]) |existing| {
         existing.deinit();
-        std.heap.page_allocator.destroy(existing);
+        std.heap.c_allocator.destroy(existing);
         terminal_slots[id] = null;
     }
 
-    // Create new terminal
-    const term_ptr = try std.heap.page_allocator.create(PersistentTerminal);
-    errdefer std.heap.page_allocator.destroy(term_ptr);
+    // Create new terminal (c_allocator for right-sized malloc, not 4KB mmap)
+    const term_ptr = try std.heap.c_allocator.create(PersistentTerminal);
+    errdefer std.heap.c_allocator.destroy(term_ptr);
 
     term_ptr.* = try PersistentTerminal.init(
         std.heap.page_allocator,
@@ -668,7 +668,7 @@ fn destroyTerminal(id: u32) void {
     if (id == 0 or id >= MAX_TERMINALS) return;
     if (terminal_slots[id]) |term| {
         term.deinit();
-        std.heap.page_allocator.destroy(term);
+        std.heap.c_allocator.destroy(term);
         terminal_slots[id] = null;
     }
 }
