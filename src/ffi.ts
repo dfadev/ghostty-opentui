@@ -404,8 +404,8 @@ export class PersistentTerminal {
    */
   getCursor(): [number, number] {
     this.assertNotDestroyed()
-    const json = native!.getTerminalCursor(this._id)
-    return JSON.parse(json) as [number, number]
+    const packed = native!.getTerminalCursorPacked(this._id)
+    return [(packed >>> 16) & 0xFFFF, packed & 0xFFFF]
   }
 
   /**

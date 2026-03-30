@@ -20,6 +20,7 @@ export interface NativeModule {
   getTerminalJson(id: number, offset: number, limit: number): string
   getTerminalText(id: number): string
   getTerminalCursor(id: number): string
+  getTerminalCursorPacked(id: number): number
   getTerminalTotalLines(id: number): number
   isTerminalReady(id: number): boolean
   getTerminalCells(id: number, offset: number, limit: number): Buffer

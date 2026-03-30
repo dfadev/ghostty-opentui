@@ -812,6 +812,21 @@ fn getTerminalCursor(id: u32) ![]const u8 {
     return std.fmt.allocPrint(alloc, "[{},{}]", .{ screen.cursor.x, screen.cursor.y });
 }
 
+/// Get cursor position as a packed u32: (x << 16) | y.
+/// Avoids string allocation + JSON.parse overhead of getTerminalCursor.
+fn getTerminalCursorPacked(id: u32) !u32 {
+    terminals_mutex.lock();
+    defer terminals_mutex.unlock();
+
+    const map = getTerminalsMap();
+    const term = map.get(id) orelse return error.TerminalNotFound;
+
+    const screen = term.terminal.screens.active;
+    const x: u16 = @intCast(screen.cursor.x);
+    const y: u16 = @intCast(screen.cursor.y);
+    return (@as(u32, x) << 16) | @as(u32, y);
+}
+
 fn getTerminalTotalLines(id: u32) !u32 {
     terminals_mutex.lock();
     defer terminals_mutex.unlock();
@@ -1064,6 +1079,7 @@ fn initModule(js: *napigen.JsContext, exports: napigen.napi_value) anyerror!napi
     try js.setNamedProperty(exports, "getTerminalJson", try js.createFunction(getTerminalJson));
     try js.setNamedProperty(exports, "getTerminalText", try js.createFunction(getTerminalText));
     try js.setNamedProperty(exports, "getTerminalCursor", try js.createFunction(getTerminalCursor));
+    try js.setNamedProperty(exports, "getTerminalCursorPacked", try js.createFunction(getTerminalCursorPacked));
     try js.setNamedProperty(exports, "getTerminalTotalLines", try js.createFunction(getTerminalTotalLines));
     try js.setNamedProperty(exports, "isTerminalReady", try js.createFunction(isTerminalReady));
     try js.setNamedProperty(exports, "getTerminalCells", try js.createFunction(getTerminalCells));
