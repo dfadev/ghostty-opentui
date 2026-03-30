@@ -1034,7 +1034,9 @@ fn getTerminalCellsBatched(js: *napigen.JsContext, id: u32, scroll_offset: i32, 
     const map = getTerminalsMap();
     const term = map.get(id) orelse return error.TerminalNotFound;
 
-    const alloc = getArenaAllocator();
+    // Use page_allocator (not arena) so the buffer outlives this call.
+    // V8 will own the memory via napi_create_external_buffer and free it on GC.
+    const alloc = std.heap.page_allocator;
     const lim: usize = if (limit == 0) @intCast(term.terminal.rows) else @intCast(limit);
     const total = term.getTotalLines();
     const max_offset: usize = if (total > lim) total - lim else 0;
@@ -1051,16 +1053,32 @@ fn getTerminalCellsBatched(js: *napigen.JsContext, id: u32, scroll_offset: i32, 
     // Mark clean within the same lock
     term.markClean();
 
+    // Return as external buffer — V8 uses our memory directly, no copy.
+    // freeExternalBuffer is called when V8 GCs the Buffer.
     var result: napigen.napi_value = undefined;
-    const status = napigen.napi.napi_create_buffer_copy(
+    const status = napigen.napi.napi_create_external_buffer(
         js.env,
         output.items.len,
         @ptrCast(output.items.ptr),
-        null,
+        freeExternalBuffer,
+        @ptrFromInt(output.capacity),
         &result,
     );
-    if (status != 0) return error.NapiBufferCreateFailed;
+    if (status != 0) {
+        output.deinit(alloc);
+        return error.NapiBufferCreateFailed;
+    }
     return result;
+}
+
+/// Release callback for napi_create_external_buffer.
+/// Called by V8 GC when the JS Buffer is collected.
+fn freeExternalBuffer(_: napigen.napi.napi_env, data: ?*anyopaque, hint: ?*anyopaque) callconv(.c) void {
+    const capacity = @intFromPtr(hint);
+    if (capacity > 0 and data != null) {
+        const ptr: [*]u8 = @ptrCast(data.?);
+        std.heap.page_allocator.free(ptr[0..capacity]);
+    }
 }
 
 fn initModule(js: *napigen.JsContext, exports: napigen.napi_value) anyerror!napigen.napi_value {
