@@ -258,10 +258,23 @@ pub fn writeJsonOutput(
 
             const cp21: u21 = @intCast(cp);
             const len = std.unicode.utf8CodepointSequenceLength(cp21) catch 1;
-            if (text_len + len <= text_buf.len) {
-                _ = std.unicode.utf8Encode(cp21, text_buf[text_len..]) catch 0;
-                text_len += len;
+            if (text_len + len > text_buf.len) {
+                // Buffer full — flush current span and continue with same style.
+                if (span_idx > 0) try writer.writeByte(',');
+                try writer.writeByte('[');
+                try writeJsonString(writer, text_buf[0..text_len]);
+                try writer.writeByte(',');
+                try writeColor(writer, current_style.?.fg);
+                try writer.writeByte(',');
+                try writeColor(writer, current_style.?.bg);
+                try writer.print(",{},{}", .{ current_style.?.flags.toInt(), span_len });
+                try writer.writeByte(']');
+                span_idx += 1;
+                text_len = 0;
+                span_len = 0;
             }
+            _ = std.unicode.utf8Encode(cp21, text_buf[text_len..]) catch 0;
+            text_len += len;
 
             span_len += if (cell.wide == .wide) 2 else 1;
         }
@@ -428,10 +441,16 @@ pub fn writeBinaryOutput(
 
             const cp21: u21 = @intCast(cp);
             const len = std.unicode.utf8CodepointSequenceLength(cp21) catch 1;
-            if (text_len + len <= text_buf.len) {
-                _ = std.unicode.utf8Encode(cp21, text_buf[text_len..]) catch 0;
-                text_len += len;
+            if (text_len + len > text_buf.len) {
+                // Buffer full — flush current span and continue with same style.
+                // Prevents silent truncation on very wide terminals with CJK text.
+                try writeBinarySpan(writer, current_style.?, text_buf[0..text_len], span_len);
+                span_count += 1;
+                text_len = 0;
+                span_len = 0;
             }
+            _ = std.unicode.utf8Encode(cp21, text_buf[text_len..]) catch 0;
+            text_len += len;
 
             span_len += if (cell.wide == .wide) 2 else 1;
         }
