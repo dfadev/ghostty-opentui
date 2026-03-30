@@ -23,6 +23,7 @@ export interface NativeModule {
   getTerminalTotalLines(id: number): number
   isTerminalReady(id: number): boolean
   getTerminalCells(id: number, offset: number, limit: number): Buffer
+  getTerminalCellsBatched(id: number, scrollOffset: number, limit: number): Buffer
   isTerminalDirty(id: number): boolean
   markTerminalClean(id: number): void
 }

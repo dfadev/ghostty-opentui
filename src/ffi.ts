@@ -382,6 +382,16 @@ export class PersistentTerminal {
   }
 
   /**
+   * Batched: get cells + mark clean in one N-API call.
+   * scrollOffset < 0 means auto-scroll to bottom.
+   * Replaces getTotalLines() + getRawCells() + markClean() triple.
+   */
+  getRawCellsBatched(scrollOffset: number, limit: number): Buffer {
+    this.assertNotDestroyed()
+    return native!.getTerminalCellsBatched(this._id, scrollOffset, limit)
+  }
+
+  /**
    * Get the current terminal content as plain text.
    */
   getText(): string {

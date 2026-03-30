@@ -1009,6 +1009,45 @@ fn getTerminalCells(js: *napigen.JsContext, id: u32, offset: u32, limit: u32) !n
     return result;
 }
 
+/// Batched version: gets cells + marks clean in one N-API crossing.
+/// scroll_offset < 0 means auto-scroll to bottom.
+/// Replaces the getTotalLines() + getTerminalCells() + markClean() triple.
+fn getTerminalCellsBatched(js: *napigen.JsContext, id: u32, scroll_offset: i32, limit: u32) !napigen.napi_value {
+    terminals_mutex.lock();
+    defer terminals_mutex.unlock();
+
+    const map = getTerminalsMap();
+    const term = map.get(id) orelse return error.TerminalNotFound;
+
+    const alloc = getArenaAllocator();
+    const lim: usize = if (limit == 0) @intCast(term.terminal.rows) else @intCast(limit);
+    const total = term.getTotalLines();
+    const max_offset: usize = if (total > lim) total - lim else 0;
+
+    // Compute effective offset: negative means auto-scroll to bottom
+    const effective_offset: usize = if (scroll_offset < 0)
+        max_offset
+    else
+        @min(@as(usize, @intCast(scroll_offset)), max_offset);
+
+    var output: std.ArrayListAligned(u8, null) = .empty;
+    try writeBinaryOutput(&output, alloc, &term.terminal, effective_offset, lim, term.cursor_style_set, total);
+
+    // Mark clean within the same lock
+    term.markClean();
+
+    var result: napigen.napi_value = undefined;
+    const status = napigen.napi.napi_create_buffer_copy(
+        js.env,
+        output.items.len,
+        @ptrCast(output.items.ptr),
+        null,
+        &result,
+    );
+    if (status != 0) return error.NapiBufferCreateFailed;
+    return result;
+}
+
 fn initModule(js: *napigen.JsContext, exports: napigen.napi_value) anyerror!napigen.napi_value {
     // Stateless functions (create terminal each call)
     try js.setNamedProperty(exports, "ptyToJson", try js.createFunction(ptyToJson));
@@ -1028,6 +1067,7 @@ fn initModule(js: *napigen.JsContext, exports: napigen.napi_value) anyerror!napi
     try js.setNamedProperty(exports, "getTerminalTotalLines", try js.createFunction(getTerminalTotalLines));
     try js.setNamedProperty(exports, "isTerminalReady", try js.createFunction(isTerminalReady));
     try js.setNamedProperty(exports, "getTerminalCells", try js.createFunction(getTerminalCells));
+    try js.setNamedProperty(exports, "getTerminalCellsBatched", try js.createFunction(getTerminalCellsBatched));
     try js.setNamedProperty(exports, "isTerminalDirty", try js.createFunction(isTerminalDirty));
     try js.setNamedProperty(exports, "markTerminalClean", try js.createFunction(markTerminalClean));
 
