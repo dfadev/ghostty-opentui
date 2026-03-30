@@ -1,49 +1,33 @@
 # Changelog
 
-## 1.4.10
-
-- Fix wide-character cell widths being ignored in highlight and cursor rendering
-  - `applyHighlightsToLine` and `applyCursorToLine` now track positions using terminal cell widths instead of JS string length
-  - Text after double-width characters (CJK, etc.) can now be highlighted and cursored correctly
-  - Cell widths measured via `wcwidth` (new dependency), so this works in both Bun and Node.js
-  - `convertSpanToChunk` now preserves `span.width` as `cellWidth` on chunks
-- Fix CI TypeScript build failure for `wcwidth` import
-  - Added `src/wcwidth.d.ts` module declaration so `bun run build` typechecks `import wcwidth from "wcwidth"` without implicit `any` errors
-
-## 1.4.9
-
-- Fix CI stability for `bun test`
-  - `src/image.test.ts` now conditionally skips external CLI spawn tests (`opencode`, `claude`) when those executables are not present in `PATH`, while still testing real-command capture with built-in tools (`ls`, `git`)
-  - Aligned `@opentui/core` and `@opentui/react` to `0.1.88` to avoid cross-version environment registration conflicts during test bootstrapping
-  - Updated `GhosttyTerminalRenderable` to support both `logicalLineInfo.lineStarts` and `logicalLineInfo.lineStartCols`, keeping line-count and scroll-position logic compatible across OpenTUI line-info shapes
-  - Updated cursor-style expectations in `terminal-buffer` tests to match current parser output where unset/DECSCUSR-bar scenarios report `block`
-
 ## 1.4.8
 
-- Report `"default"` cursor style when no DECSCUSR has been received
-  - Persistent terminals track whether the inner application has explicitly set a cursor style; stateless `ptyToJson` compares before/after parsing
-  - When no DECSCUSR was sent, JSON reports `cursorStyle: "default"` instead of `"block"`, which maps to opentui's `"default"` style (`\x1b[0 q` — preserve the outer terminal's native cursor)
-  - Prevents the Ghostty parser's VT default (`block`) from overriding the user's terminal cursor preference at the shell prompt
-- Pass through cursor style from inner applications via DECSCUSR escape sequences
-  - The Ghostty terminal parser's `cursor_style` is now included in the JSON output and mapped to opentui cursor styles (`bar` → `line`, `underline` → `underline`, `block`/`block_hollow` → `block`)
-  - When `cursorStyle` prop is omitted, `setCursorStyle()` uses the style from the running application (e.g. vim sets underline, shell sets bar)
-  - When `cursorStyle` prop is explicitly set, it overrides the terminal's native style
-  - Added `focusable` option to `GhosttyTerminalOptions` for non-JSX construction
-  - Added tests for cursor style passthrough and override behavior
-- Preserve the terminal's native cursor style when `cursorStyle` is not set
-  - `cursorStyle` now defaults to `undefined` instead of `"block"`, so `setCursorStyle()` is only called when an explicit style is requested
-  - Previously the default `"block"` would override the user's terminal cursor preference (e.g. line/bar) on every render frame
-- Respect focus state when rendering terminal cursor via the cursor API
-  - When `focusable` is set, cursor rendering is gated on `_focused` so only the focused component claims the terminal cursor (e.g. an unfocused ghostty-terminal alongside a focused textarea won't position the cursor in the wrong pane)
-  - Added `focus()` / `blur()` overrides matching opentui's `EditBufferRenderable` pattern
-  - Non-focusable instances (the default) are unaffected and continue to show the cursor unconditionally
-  - Added tests for focused, unfocused, and blur cursor behavior
-- Fix `ghostty-terminal` block cursor appearing too wide in the first and last screen columns
-  - `GhosttyTerminalRenderable` now renders the live cursor through the terminal cursor API instead of painting it into `StyledText`
-  - Prevents edge-column cursor background bleed while keeping the existing `terminalDataToStyledText(...)` API unchanged
-  - Added a regression test that verifies cursor rendering goes through `setCursorStyle(...)` / `setCursorPosition(...)`
+- Native feed/render performance optimizations
+  - **build**: Default to `ReleaseFast` optimization (was Debug) — eliminates ~250ms overhead per feed from safety checks in the VT parser hot loop
+  - **feed**: Add `feedTerminalBuffer` N-API function that reads `Buffer`/`Uint8Array` memory directly via `napi_get_buffer_info`, skipping the JS string decode→re-encode round-trip
+  - **render**: Batch `getTotalLines()` + `getTerminalCells()` + `markClean()` into single `getTerminalCellsBatched()` call — one N-API crossing per frame instead of three
+  - **render**: Use `napi_create_external_buffer` for zero-copy render output — V8 reads directly from Zig memory, freed on GC
+  - **cursor**: Return cursor position as packed `u32` instead of JSON string — eliminates arena allocation, string formatting, and `JSON.parse()` per call
+  - **storage**: Replace `AutoHashMap` with fixed slot array for terminal lookup — O(1) direct indexing with no hashing
+  - **alloc**: Use `c_allocator` (malloc/free) for `PersistentTerminal` struct instead of `page_allocator` (mmap 4KB)
+  - Remove `TextDecoder` from `PersistentTerminal` (no longer needed with direct buffer path)
+- FrameBuffer-only rendering with binary cell protocol
+  - Drop TextBuffer/StyledText path — FrameBuffer reads raw binary cell data directly from Zig
+  - Binary cell bridge with dirty tracking, countLines/RGBA caching
+  - O(1) `countLines` via `total_rows`, O(1) row seek via `Point.screen`
+  - `scrollOffset` support on renderable
+- Cursor improvements
+  - Report `"default"` cursor style when no DECSCUSR has been received
+  - Pass through cursor style from inner applications via DECSCUSR escape sequences
+  - Preserve the terminal's native cursor style when `cursorStyle` is not set
+  - Respect focus state when rendering terminal cursor via the cursor API
+  - Fix cursor position not updating when renderable moves
+  - Include cursor style in binary protocol header
+  - Render cursor via terminal cursor API instead of painting into StyledText
+- Fix wide-character cell widths being ignored in highlight and cursor rendering
+- Fix silent text truncation on very wide terminals
+  - `writeBinaryOutput` and `writeJsonOutput` now flush the current span when the 4096-byte text buffer fills, instead of silently dropping characters
 - Upgrade `@opentui/core` and `@opentui/react` from 0.1.72 to 0.1.90
-  - Fix `lineStarts` → `lineStartCols` rename in `terminal-buffer.ts` (upstream metadata rename in v0.1.87)
 
 ## 1.4.7
 
