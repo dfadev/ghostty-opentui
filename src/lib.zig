@@ -589,6 +589,8 @@ const PersistentTerminal = struct {
 
     pub fn reset(self: *PersistentTerminal) void {
         self.terminal.fullReset();
+        // Re-enable linefeed mode so \n does CR+LF (fullReset clears all modes)
+        self.terminal.modes.set(.linefeed, true);
         self.cursor_style_set = false;
         // Recreate the stream to reset parser state
         if (self.stream) |*s| {

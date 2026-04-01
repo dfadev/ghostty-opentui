@@ -68,6 +68,8 @@ export interface GhosttyFrameBufferOptions extends FrameBufferOptions {
   cursorStyle?: "block" | "underline"
   highlights?: HighlightRegion[]
   persistent?: boolean
+  /** Override the default background color (default: #1e1e1e) */
+  defaultBg?: string
 }
 
 /**
@@ -92,6 +94,8 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
   private _lastCursorStyleByte = 0
   private _lastRenderX = -1
   private _lastRenderY = -1
+  private _defaultBg: RGBA
+  private _respectAlpha: boolean
 
   constructor(ctx: RenderContext, options: GhosttyFrameBufferOptions) {
     const cols = options.cols ?? 120
@@ -100,7 +104,7 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
       ...options,
       width: cols,
       height: rows,
-      respectAlpha: false,
+      respectAlpha: options.respectAlpha ?? false,
     })
 
     this._cols = cols
@@ -108,6 +112,8 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
     this._showCursor = options.showCursor ?? false
     this._cursorStyle = options.cursorStyle ?? "block"
     this._highlights = options.highlights
+    this._defaultBg = options.defaultBg ? cachedColor(options.defaultBg) : DEFAULT_BG
+    this._respectAlpha = options.respectAlpha ?? false
 
     this._terminal = new PersistentTerminal({ cols, rows })
   }
@@ -124,6 +130,7 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
     if (this._cols !== value) {
       this._cols = value
       this._terminal.resize(value, this._rows)
+      this.yogaNode.setWidth(value)
       this._contentDirty = true
       this.requestRender()
     }
@@ -137,6 +144,7 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
     if (this._rows !== value) {
       this._rows = value
       this._terminal.resize(this._cols, value)
+      this.yogaNode.setHeight(value)
       this._contentDirty = true
       this.requestRender()
     }
@@ -186,6 +194,15 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
     this._highlights = value
     this._contentDirty = true
     this.requestRender()
+  }
+
+  set defaultBg(value: string) {
+    const c = cachedColor(value)
+    if (this._defaultBg !== c) {
+      this._defaultBg = c
+      this._contentDirty = true
+      this.requestRender()
+    }
   }
 
   get scrollOffset(): number | undefined {
@@ -253,7 +270,7 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
     }
 
     const fb = this.frameBuffer
-    fb.clear(DEFAULT_BG)
+    fb.clear(this._respectAlpha ? TRANSPARENT : this._defaultBg)
 
     const lim = this._limit ?? this._rows
     const buf = this._terminal.getRawCellsBatched(
@@ -321,7 +338,7 @@ export class GhosttyFrameBufferRenderable extends FrameBufferRenderable {
         let bgDraw = bg
 
         if (flags & StyleFlags.INVERSE) {
-          fgDraw = bg.a > 0 ? bg : DEFAULT_BG
+          fgDraw = bg.a > 0 ? bg : this._defaultBg
           bgDraw = fg
         }
 

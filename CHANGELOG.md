@@ -2,6 +2,12 @@
 
 ## 1.4.8
 
+- GhosttyFrameBufferRenderable improvements
+  - Add `defaultBg` option to override the default background color
+  - Add `respectAlpha` option for transparent background support
+  - Fix `cols`/`rows` setters not updating yoga node dimensions on resize
+  - Fix `reset()` clearing linefeed mode — `\n` now correctly does CR+LF after reset
+
 - Native feed/render performance optimizations
   - **build**: Default to `ReleaseFast` optimization (was Debug) — eliminates ~250ms overhead per feed from safety checks in the VT parser hot loop
   - **feed**: Add `feedTerminalBuffer` N-API function that reads `Buffer`/`Uint8Array` memory directly via `napi_get_buffer_info`, skipping the JS string decode→re-encode round-trip
